@@ -17,7 +17,6 @@ from rank_bm25 import BM25Okapi
 from typing import List, Dict, Tuple, Optional
 import json
 import time
-from collections import OrderedDict
 from datetime import datetime
 import re
 
@@ -177,6 +176,15 @@ def get_theme_css(theme: str) -> str:
             color: white;
             cursor: pointer;
         }}
+        .iab-badge {{
+            background-color: {accent}20;
+            color: {accent};
+            padding: 0.2rem 0.6rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            margin-right: 0.3rem;
+        }}
         .video-preview-placeholder {{
             background: linear-gradient(145deg, {bg_sidebar}, {card_bg});
             border: 1px solid {border_color};
@@ -190,15 +198,6 @@ def get_theme_css(theme: str) -> str:
         .stProgress > div > div {{
             background-color: {accent};
             border-radius: 10px;
-        }}
-        .iab-badge {{
-            background-color: {accent}20;
-            color: {accent};
-            padding: 0.2rem 0.6rem;
-            border-radius: 4px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            margin-right: 0.3rem;
         }}
     </style>
     """
@@ -273,7 +272,6 @@ def load_video_metadata_into_session():
         filename = meta.get('filename')
         if filename:
             st.session_state.enriched_metadata[filename] = meta
-    # Also store full texts from scenes? Not needed here.
 
 load_video_metadata_into_session()
 
@@ -577,6 +575,7 @@ def generate_video_metadata(full_text: str, filename: str, domain_hint: str) -> 
             "entities": 0.8 if llm_meta.get("entities") else 0.6,
             "iab": 0.7 if iab_categories else 0.5
         },
+        "user_tags": [],
         "created_at": time.time()
     }
     return metadata
@@ -798,7 +797,7 @@ def render_editable_tags(video_filename: str, current_tags: List[str], key_prefi
     with col1:
         if tags:
             tag_html = " ".join([f'<span class="tag-pill editable" onclick="alert(\'Click edit button to modify\')">{tag}</span>' for tag in tags[:8]])
-            st.markdown(f"🏷️ {tag_html}", unsafe_allow_html=True)
+            st.markdown(f"✏️ User tags: {tag_html}", unsafe_allow_html=True)
         else:
             st.caption("No user tags")
     with col2:
@@ -1018,7 +1017,6 @@ if query and COLLECTION_VALID:
             else:
                 results = results[:n_results]
             st.session_state.result_cache[cache_key] = results
-            # Limit cache size
             if len(st.session_state.result_cache) > 50:
                 oldest = min(st.session_state.result_cache.keys(), key=lambda k: st.session_state.result_cache[k][1] if isinstance(st.session_state.result_cache[k], tuple) else 0)
                 del st.session_state.result_cache[oldest]
@@ -1064,17 +1062,33 @@ if query and COLLECTION_VALID:
                     st.markdown(f"<span class='confidence-badge'>{norm_score*100:.0f}%</span>", unsafe_allow_html=True)
                 st.progress(norm_score)
 
-                # Tags (editable)
+                # 1. Scene-level tags (from chunk metadata)
+                if meta.get("tags") and meta["tags"] != "general":
+                    scene_tags = [t.strip() for t in meta["tags"].split(", ") if t.strip() and t != "general"][:6]
+                    scene_tag_html = " ".join([f'<span class="tag-pill">{tag}</span>' for tag in scene_tags])
+                    st.markdown(f"🎬 Scene tags: {scene_tag_html}", unsafe_allow_html=True)
+
+                # 2. Video-level metadata
                 video_meta = st.session_state.enriched_metadata.get(meta['filename'], {})
-                user_tags = video_meta.get('user_tags', [])
-                # Also show IAB categories
+                video_keywords = video_meta.get('keywords', [])
+                if video_keywords:
+                    kw_html = " ".join([f'<span class="tag-pill">{kw}</span>' for kw in video_keywords[:6]])
+                    st.markdown(f"📌 Video keywords: {kw_html}", unsafe_allow_html=True)
+
+                # 3. IAB categories
                 iab_cats = video_meta.get('iab_categories', [])
                 if iab_cats:
                     iab_html = " ".join([f'<span class="iab-badge">{cat}</span>' for cat in iab_cats[:3]])
                     st.markdown(f"📺 {iab_html}", unsafe_allow_html=True)
 
-                # Render editable tags
+                # 4. Editable user tags
+                user_tags = video_meta.get('user_tags', [])
                 render_editable_tags(meta['filename'], user_tags, f"scene_{i}")
+
+                # (Optional) Debug expander – remove after verification
+                # with st.expander("🔍 Debug metadata"):
+                #     st.json(video_meta)
+                #     st.write("Scene metadata:", meta)
 
                 with st.expander("💬 Transcript"):
                     st.write(r['text'][:500] + ("…" if len(r['text']) > 500 else ""))
@@ -1126,7 +1140,7 @@ if st.session_state.selected_result:
     with col_info:
         st.markdown("**📝 Context**")
         st.write(sel['text'][:200] + "…")
-        st.markdown("**🏷️ Video Tags**")
+        st.markdown("**🏷️ Video Metadata**")
         video_meta = st.session_state.enriched_metadata.get(meta_sel['filename'], {})
         if video_meta:
             st.markdown(f"*Summary:* {video_meta.get('summary', 'N/A')}")
