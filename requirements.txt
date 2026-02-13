@@ -1,0 +1,10 @@
+streamlit>=1.28.0
+pysrt>=1.1.0
+webvtt-py>=0.5.1
+sentence-transformers>=2.2.2
+chromadb>=0.4.22
+keybert>=0.8.0
+mistralai>=1.0.0
+scikit-learn>=1.3.0
+spacy>=3.7.0
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.0/en_core_web_sm-3.7.0-py3-none-any.whl
