@@ -12,9 +12,6 @@ from keybert import KeyBERT
 import chromadb
 from chromadb.config import Settings
 from mistralai import Mistral
-import spacy
-import subprocess
-import sys
 from typing import List, Dict, Tuple, Optional
 import json
 import time
@@ -160,14 +157,9 @@ def get_theme_css(theme: str) -> str:
         .processing {{
             animation: pulse 1.5s infinite;
         }}
-        /* Search bar styling */
         .stTextInput input {{
             font-size: 1.1rem !important;
             padding: 0.75rem 1rem !important;
-        }}
-        /* Icon buttons */
-        .stButton button[kind="secondary"] {{
-            font-size: 1.2rem !important;
         }}
     </style>
     """
@@ -182,17 +174,9 @@ def load_models():
     bi_encoder = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
     cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu')
     kw_model = KeyBERT(model='all-MiniLM-L6-v2')
+    return bi_encoder, cross_encoder, kw_model
 
-    # Download spaCy model at runtime (cached after first run)
-    try:
-        nlp = spacy.load("en_core_web_sm")
-    except OSError:
-        subprocess.run([sys.executable, "-m", "spacy", "download", "en_core_web_sm"])
-        nlp = spacy.load("en_core_web_sm")
-
-    return bi_encoder, cross_encoder, kw_model, nlp
-
-bi_encoder, cross_encoder, kw_model, nlp = load_models()
+bi_encoder, cross_encoder, kw_model = load_models()
 
 # ------------------------------------------------------------------
 # PERSISTENT CHROMADB (with versioning, dimension 384)
@@ -206,7 +190,6 @@ def init_chromadb():
     collection_name = "cairo_subtitles"
     try:
         collection = client.get_collection(collection_name)
-        # Verify metadata matches current model
         if collection.metadata and collection.metadata.get("embedding_model") != "all-MiniLM-L6-v2":
             st.warning("⚠️ Database created with a different model. Please reset database in sidebar.")
             return None
@@ -234,7 +217,6 @@ def get_file_hash(file_content: bytes) -> str:
     return hashlib.md5(file_content).hexdigest()
 
 def expand_query(query: str) -> str:
-    """KeyBERT query expansion – no hardcoded synonyms."""
     keywords = kw_model.extract_keywords(
         query,
         keyphrase_ngram_range=(1, 2),
@@ -346,7 +328,7 @@ def sliding_window_chunks_vtt(filepath: str, window: int, overlap: int) -> List[
     return chunks
 
 # ------------------------------------------------------------------
-# ENHANCED METADATA PIPELINE (NER + KeyBERT + Mistral LLM)
+# ENHANCED METADATA PIPELINE (KeyBERT + optional Mistral LLM)
 # ------------------------------------------------------------------
 def _parse_llm_output(text: str) -> Dict:
     result = {"summary": "", "themes": [], "entities": [], "tags": []}
@@ -365,7 +347,6 @@ def _parse_llm_output(text: str) -> Dict:
     return result
 
 def _enrich_with_llm(full_text: str, domain_hint: str) -> Dict:
-    """Mistral LLM enrichment (optional – returns empty if no API key)."""
     if not MISTRAL_API_KEY:
         return {}
     full_text = full_text[:8000]
@@ -402,41 +383,28 @@ Rules:
         return {}
 
 def generate_enhanced_metadata(full_text: str, filename: str, domain_hint: str = "general content") -> Dict:
-    """Multi-stage metadata pipeline: NER + KeyBERT + optional LLM."""
-    # Stage 1: NER with spaCy (fast)
-    doc = nlp(full_text[:10000])
-    entities = {
-        "PERSON": list(set([ent.text for ent in doc.ents if ent.label_ == "PERSON"])),
-        "ORG": list(set([ent.text for ent in doc.ents if ent.label_ == "ORG"])),
-        "GPE": list(set([ent.text for ent in doc.ents if ent.label_ == "GPE"])),
-        "EVENT": list(set([ent.text for ent in doc.ents if ent.label_ == "EVENT"]))
-    }
-
-    # Stage 2: KeyBERT semantic keywords (diverse)
+    # Stage 1: KeyBERT semantic keywords (diverse)
     keywords = kw_model.extract_keywords(
         full_text[:5000],
         keyphrase_ngram_range=(1, 3),
         stop_words='english',
-        top_n=10,
+        top_n=15,
         diversity=0.7
     )
     semantic_tags = [kw[0] for kw in keywords]
 
-    # Stage 3: LLM enrichment (optional)
+    # Stage 2: LLM enrichment (optional)
     llm_meta = _enrich_with_llm(full_text, domain_hint)
 
-    # Stage 4: Merge results
+    # Stage 3: Merge results
     merged = {
         "summary": llm_meta.get("summary", " ".join(semantic_tags[:3])),
         "themes": llm_meta.get("themes", semantic_tags[:5]),
-        "entities": {
-            **entities,
-            "LLM": llm_meta.get("entities", [])
-        },
+        "entities": llm_meta.get("entities", []),
         "tags": {
             "primary": llm_meta.get("tags", [])[:5],
             "secondary": semantic_tags[5:10],
-            "entities": entities["PERSON"][:3] + entities["ORG"][:2]
+            "keywords": semantic_tags[:8]  # simple fallback
         },
         "confidence": {
             "summary": 0.9 if llm_meta.get("summary") else 0.6,
@@ -481,7 +449,6 @@ def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint
         os.unlink(tmp_path)
         return None, "Unsupported file type."
 
-    # Filter valid chunks
     valid_chunks = [c for c in chunks if c["text"].strip() and len(c["text"]) > 10]
     if not valid_chunks:
         os.unlink(tmp_path)
@@ -504,9 +471,7 @@ def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint
             "speaker": "unknown"
         })
 
-    # Generate embeddings (batched)
     embeddings = get_embeddings_batch(texts)
-
     if len(embeddings) != len(texts):
         os.unlink(tmp_path)
         return None, f"Embedding mismatch: {len(embeddings)} vs {len(texts)}"
@@ -537,7 +502,6 @@ def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint
     full_text = " ".join(texts)
     st.session_state.full_texts[filename] = full_text
 
-    # Generate enhanced metadata (non-blocking)
     with st.spinner("🧠 Generating AI metadata..."):
         enriched = generate_enhanced_metadata(full_text, filename, domain_hint)
         st.session_state.enriched_metadata[filename] = enriched
@@ -640,7 +604,6 @@ with st.sidebar:
 
     st.divider()
 
-    # Chunking settings
     with st.expander("🎛️ Scene Chunking", expanded=False):
         st.caption("Controls how videos are split into scenes. Changes apply to **new uploads**.")
         window_size = st.slider("Window (seconds)", 10, 60, 30, 5)
@@ -648,7 +611,6 @@ with st.sidebar:
 
     st.divider()
 
-    # Upload section with domain hint
     st.subheader("📤 Upload Content")
     domain_hint = st.selectbox(
         "Content domain (improves AI metadata)",
@@ -680,7 +642,6 @@ with st.sidebar:
 
     st.divider()
 
-    # Collection statistics
     if COLLECTION_VALID:
         try:
             all_items = collection.get()
@@ -703,7 +664,6 @@ with st.sidebar:
     col1.metric("Videos", len(files_indexed))
     col2.metric("Scenes", f"{total_chunks:,}")
 
-    # Manage indexed files
     if files_indexed:
         with st.expander("📁 Manage Videos", expanded=False):
             for filename in sorted(files_indexed):
@@ -719,7 +679,6 @@ with st.sidebar:
 
     st.divider()
 
-    # Database tools
     with st.expander("⚙️ System", expanded=False):
         if st.button("🔄 Reset Database"):
             try:
@@ -738,7 +697,6 @@ with st.sidebar:
 
     st.divider()
 
-    # LLM Enrichment panel (optional)
     with st.expander("🧠 AI Video Summary", expanded=False):
         if COLLECTION_VALID and files_indexed:
             selected_file = st.selectbox(
@@ -792,7 +750,6 @@ with st.sidebar:
 st.title("🔍 Semantic Video Search")
 st.markdown("Find exact moments using natural language. *Powered by subtitle semantics + AI enrichment.*")
 
-# Search container with advanced options
 search_container = st.container()
 with search_container:
     col_search, col_opts = st.columns([4, 1])
@@ -823,7 +780,6 @@ with search_container:
 
 st.divider()
 
-# Results display
 if query and COLLECTION_VALID:
     st.session_state.last_query = query
 
@@ -840,12 +796,11 @@ if query and COLLECTION_VALID:
         for i, r in enumerate(results):
             meta = r["metadata"]
             score = r["score"]
-            norm_score = max(0.0, min(1.0, (score + 5) / 20))  # normalize cross-encoder score
+            norm_score = max(0.0, min(1.0, (score + 5) / 20))
 
             with st.container():
                 st.markdown('<div class="result-card">', unsafe_allow_html=True)
 
-                # Header: filename + timecode + confidence badge
                 col1, col2 = st.columns([3, 1])
                 with col1:
                     display_name = meta['filename'][:30] + "..." if len(meta['filename']) > 30 else meta['filename']
@@ -854,20 +809,16 @@ if query and COLLECTION_VALID:
                 with col2:
                     st.markdown(f"<div class='confidence-badge'>{norm_score*100:.0f}% match</div>", unsafe_allow_html=True)
 
-                # Visual progress bar
                 st.progress(norm_score)
 
-                # Tags
                 if meta.get("tags"):
                     tags = meta["tags"].split(", ")[:8]
                     tag_html = " ".join([f'<span class="tag-pill">{tag}</span>' for tag in tags if tag != "general"])
                     st.markdown(f"🏷️ {tag_html}", unsafe_allow_html=True)
 
-                # Expandable transcript
                 with st.expander("💬 Scene transcript"):
                     st.write(r["text"])
 
-                # Action buttons
                 col_btn1, col_btn2 = st.columns(2)
                 with col_btn1:
                     if st.button("▶️ Jump to", key=f"jump_{i}", use_container_width=True):
@@ -887,7 +838,6 @@ if query and COLLECTION_VALID:
     else:
         st.warning("No relevant moments found. Try rephrasing your query or uploading more content.")
 
-    # Detail pane for selected result
     if st.session_state.selected_result:
         st.divider()
         st.subheader("🎬 Selected Moment")
@@ -898,7 +848,6 @@ if query and COLLECTION_VALID:
         with col_vid:
             st.markdown('<div class="video-preview-placeholder">🎬 Video Preview (Integration Point)</div>', unsafe_allow_html=True)
             st.caption(f"⏱️ {meta_sel['timecode']} in {meta_sel['filename']}")
-            # Simulated player controls
             col_play, col_time = st.columns([1, 3])
             with col_play:
                 st.button("⏯️ Play", use_container_width=True)
@@ -925,7 +874,6 @@ if query and COLLECTION_VALID:
 elif COLLECTION_VALID and total_chunks == 0:
     st.info("👋 Start by uploading subtitle files in the sidebar.")
 else:
-    # Empty state with value proposition
     st.markdown("""
     ### Welcome to Project Cairo
 
