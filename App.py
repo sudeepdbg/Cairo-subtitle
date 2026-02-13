@@ -6,6 +6,7 @@ import os
 import tempfile
 import hashlib
 import numpy as np
+import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from keybert import KeyBERT
@@ -15,6 +16,8 @@ from mistralai import Mistral
 from typing import List, Dict, Tuple, Optional
 import json
 import time
+from collections import OrderedDict
+from datetime import datetime
 
 # ------------------------------------------------------------------
 # PAGE CONFIG (MUST BE FIRST STREAMLIT COMMAND)
@@ -37,7 +40,13 @@ _DEFAULT_STATE = {
     "collection": None,
     "enriched_metadata": {},
     "full_texts": {},
-    "processed_hashes": set()
+    "processed_hashes": set(),
+    # 🚀 ENHANCEMENT: Search history + cache
+    "search_history": [],          # list of (query, timestamp)
+    "query_cache": {},            # {rewritten_query: original_query}
+    "result_cache": {},          # {query: (results, timestamp)}
+    "filter_filename": None,     # active filename filter
+    "result_offset": 0,         # for load more
 }
 for key, val in _DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -49,98 +58,117 @@ for key, val in _DEFAULT_STATE.items():
 MISTRAL_API_KEY = st.secrets.get("MISTRAL_API_KEY")
 
 # ------------------------------------------------------------------
-# THEME CSS – Full coverage, dark/light toggle, modern cards
+# 🚀 ENHANCEMENT: Glassmorphism CSS + smoother animations
 # ------------------------------------------------------------------
 def get_theme_css(theme: str) -> str:
-    bg_main = "#0e1117" if theme == "dark" else "#ffffff"
-    bg_sidebar = "#1a1c24" if theme == "dark" else "#f8fafc"
+    bg_main = "#0a0c10" if theme == "dark" else "#ffffff"
+    bg_sidebar = "rgba(20, 22, 27, 0.95)" if theme == "dark" else "rgba(248, 250, 252, 0.95)"
     text_primary = "#fafafa" if theme == "dark" else "#1e293b"
     text_secondary = "#a0aec0" if theme == "dark" else "#64748b"
-    border_color = "#2d323d" if theme == "dark" else "#e2e8f0"
+    border_color = "rgba(45, 50, 61, 0.5)" if theme == "dark" else "rgba(226, 232, 240, 0.8)"
     accent = "#4a6fa5" if theme == "dark" else "#3b82f6"
-    card_bg = bg_sidebar
-    tag_bg = "rgba(74, 111, 165, 0.15)" if theme == "dark" else "rgba(59, 130, 246, 0.1)"
+    card_bg = "rgba(26, 28, 36, 0.7)" if theme == "dark" else "rgba(255, 255, 255, 0.7)"
+    tag_bg = "rgba(74, 111, 165, 0.2)" if theme == "dark" else "rgba(59, 130, 246, 0.1)"
     tag_text = text_primary
 
     return f"""
     <style>
-        :root {{
-            --bg-main: {bg_main};
-            --bg-sidebar: {bg_sidebar};
-            --text-primary: {text_primary};
-            --text-secondary: {text_secondary};
-            --border-color: {border_color};
-            --accent: {accent};
-            --card-bg: {card_bg};
-            --tag-bg: {tag_bg};
-            --tag-text: {tag_text};
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        
+        * {{
+            font-family: 'Inter', sans-serif;
         }}
         .stApp, .stApp header, .stApp footer {{
-            background-color: var(--bg-main) !important;
+            background: linear-gradient(145deg, {bg_main}, {'#0a0c10' if theme == 'dark' else '#fafafa'}) !important;
             color: var(--text-primary) !important;
         }}
         section[data-testid="stSidebar"] {{
-            background-color: var(--bg-sidebar) !important;
-            border-right: 1px solid var(--border-color) !important;
+            background: {bg_sidebar} !important;
+            backdrop-filter: blur(12px) !important;
+            border-right: 1px solid {border_color} !important;
         }}
         .stTextInput input, .stNumberInput input, .stSelectbox, .stTextArea textarea {{
-            background-color: {'#262730' if theme == 'dark' else '#ffffff'} !important;
+            background-color: {'rgba(38, 39, 48, 0.8)' if theme == 'dark' else 'rgba(255,255,255,0.8)'} !important;
             color: var(--text-primary) !important;
             border-color: {border_color} !important;
-            border-radius: 8px !important;
+            border-radius: 12px !important;
+            backdrop-filter: blur(4px) !important;
+            transition: all 0.2s ease;
+        }}
+        .stTextInput input:focus, .stNumberInput input:focus {{
+            border-color: var(--accent) !important;
+            box-shadow: 0 0 0 2px rgba(74, 111, 165, 0.2) !important;
         }}
         .stButton button {{
-            background-color: {'#2d2f36' if theme == 'dark' else '#ffffff'} !important;
+            background-color: {'rgba(45, 47, 54, 0.8)' if theme == 'dark' else 'rgba(255,255,255,0.8)'} !important;
             color: var(--text-primary) !important;
             border: 1px solid {border_color} !important;
-            border-radius: 8px !important;
+            border-radius: 12px !important;
+            backdrop-filter: blur(4px) !important;
             transition: all 0.2s ease;
+            font-weight: 500;
         }}
         .stButton button:hover {{
             border-color: var(--accent) !important;
-            background-color: {'#3a3c44' if theme == 'dark' else '#f1f5f9'} !important;
+            background-color: {'rgba(58, 60, 68, 0.9)' if theme == 'dark' else 'rgba(241, 245, 249, 0.9)'} !important;
+            transform: translateY(-1px);
         }}
         div[data-testid="stExpander"] {{
-            background-color: {'#1e2028' if theme == 'dark' else '#f8f9fa'} !important;
+            background-color: {'rgba(30, 32, 40, 0.5)' if theme == 'dark' else 'rgba(248, 249, 250, 0.7)'} !important;
             border: 1px solid {border_color} !important;
-            border-radius: 12px !important;
+            border-radius: 16px !important;
+            backdrop-filter: blur(8px) !important;
         }}
         .result-card {{
-            background: var(--card-bg);
-            border-radius: 16px;
+            background: {card_bg};
+            backdrop-filter: blur(12px) !important;
+            border-radius: 20px;
             padding: 1.5rem;
             margin-bottom: 1rem;
-            border: 1px solid var(--border-color);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            border: 1px solid {border_color};
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            animation: fadeIn 0.5s ease;
         }}
         .result-card:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 12px 30px rgba(0,0,0,0.2);
+            transform: translateY(-4px);
+            box-shadow: 0 20px 35px rgba(0,0,0,0.3);
             border-color: var(--accent);
         }}
+        @keyframes fadeIn {{
+            from {{ opacity: 0; transform: translateY(10px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
         .confidence-badge {{
-            background: linear-gradient(90deg, #10b981 0%, #059669 100%);
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
             color: white;
             padding: 0.3em 0.8em;
-            border-radius: 20px;
+            border-radius: 30px;
             font-weight: 600;
             font-size: 0.8em;
             display: inline-block;
+            box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
         }}
         .tag-pill {{
-            background: var(--tag-bg);
-            color: var(--tag-text);
-            padding: 0.25em 0.75em;
-            border-radius: 16px;
+            background: {tag_bg};
+            color: {tag_text};
+            padding: 0.25em 0.9em;
+            border-radius: 30px;
             font-size: 0.8em;
             margin-right: 0.4em;
             margin-bottom: 0.3em;
             display: inline-block;
             border: 1px solid {border_color};
+            backdrop-filter: blur(4px);
+            transition: all 0.2s ease;
+        }}
+        .tag-pill:hover {{
+            background: {accent};
+            color: white;
+            cursor: pointer;
         }}
         .video-preview-placeholder {{
-            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-            border-radius: 12px;
+            background: linear-gradient(145deg, #1e293b, #0f172a);
+            border-radius: 16px;
             height: 140px;
             display: flex;
             align-items: center;
@@ -148,18 +176,32 @@ def get_theme_css(theme: str) -> str:
             color: #94a3b8;
             font-weight: 500;
             margin-bottom: 1rem;
+            border: 1px solid {border_color};
+            box-shadow: 0 8px 20px rgba(0,0,0,0.2);
         }}
-        @keyframes pulse {{
-            0% {{ opacity: 0.8; }}
-            50% {{ opacity: 1; }}
-            100% {{ opacity: 0.8; }}
+        .stProgress > div > div {{
+            background: linear-gradient(90deg, {accent}, #60a5fa) !important;
+            border-radius: 10px !important;
         }}
-        .processing {{
-            animation: pulse 1.5s infinite;
+        .st-bb, .st-at {{
+            background-color: transparent !important;
         }}
-        .stTextInput input {{
-            font-size: 1.1rem !important;
-            padding: 0.75rem 1rem !important;
+        /* 🚀 ENHANCEMENT: Toast notifications */
+        .toast {{
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: {accent};
+            color: white;
+            padding: 12px 24px;
+            border-radius: 50px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+            animation: slideIn 0.3s ease;
+            z-index: 9999;
+        }}
+        @keyframes slideIn {{
+            from {{ transform: translateX(100%); opacity: 0; }}
+            to {{ transform: translateX(0); opacity: 1; }}
         }}
     </style>
     """
@@ -211,7 +253,64 @@ collection = st.session_state.collection
 COLLECTION_VALID = collection is not None
 
 # ------------------------------------------------------------------
-# HELPER FUNCTIONS
+# 🚀 ENHANCEMENT: LLM Query Rewriting + Semantic Cache
+# ------------------------------------------------------------------
+def rewrite_query_with_llm(query: str) -> str:
+    """Use Mistral to rewrite the query for better entity understanding."""
+    if not MISTRAL_API_KEY:
+        return query
+    
+    # Simple in-memory cache to avoid repeated API calls
+    if query in st.session_state.query_cache:
+        return st.session_state.query_cache[query]
+    
+    prompt = f"""Rewrite this search query to be more specific and disambiguate entities.
+    - Expand names (e.g., 'Ronaldo' → 'Cristiano Ronaldo')
+    - Clarify temporal terms (e.g., 'first goal' → 'debut goal, first goal')
+    - Remove ambiguity.
+    Output ONLY the rewritten query, no extra text.
+
+    Original: {query}
+    Rewritten:"""
+    
+    try:
+        client = Mistral(api_key=MISTRAL_API_KEY)
+        response = client.chat.complete(
+            model="mistral-large-latest",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=50
+        )
+        rewritten = response.choices[0].message.content.strip()
+        if rewritten and len(rewritten) > 3:
+            st.session_state.query_cache[query] = rewritten
+            return rewritten
+    except Exception as e:
+        st.warning(f"⚠️ Query rewriting failed: {str(e)[:50]}")
+    
+    return query
+
+# 🚀 Simple LRU cache for search results
+def get_cached_results(query: str, n_results: int):
+    cache_key = f"{query}_{n_results}"
+    if cache_key in st.session_state.result_cache:
+        results, timestamp = st.session_state.result_cache[cache_key]
+        # Cache TTL: 1 hour
+        if time.time() - timestamp < 3600:
+            return results
+    return None
+
+def cache_results(query: str, n_results: int, results):
+    cache_key = f"{query}_{n_results}"
+    st.session_state.result_cache[cache_key] = (results, time.time())
+    # Limit cache size to 50 entries (simple LRU)
+    if len(st.session_state.result_cache) > 50:
+        # Remove oldest
+        oldest = min(st.session_state.result_cache.items(), key=lambda x: x[1][1])
+        del st.session_state.result_cache[oldest[0]]
+
+# ------------------------------------------------------------------
+# HELPER FUNCTIONS (unchanged)
 # ------------------------------------------------------------------
 def get_file_hash(file_content: bytes) -> str:
     return hashlib.md5(file_content).hexdigest()
@@ -240,9 +339,10 @@ def get_embeddings_batch(texts: List[str], batch_size: int = 64) -> List[List[fl
     ).tolist()
 
 # ------------------------------------------------------------------
-# SLIDING WINDOW CHUNKING (30s windows, 15s overlap)
+# SLIDING WINDOW CHUNKING (unchanged)
 # ------------------------------------------------------------------
 def sliding_window_chunks_srt(filepath: str, window: int, overlap: int) -> List[Dict]:
+    # ... (keep your existing implementation)
     subs = pysrt.open(filepath)
     if not subs:
         return []
@@ -257,13 +357,11 @@ def sliding_window_chunks_srt(filepath: str, window: int, overlap: int) -> List[
             })
     if not entries:
         return []
-
     chunks = []
     n = len(entries)
     start_idx = 0
     current_start = entries[0]["start"]
     last_end = entries[-1]["end"]
-
     while current_start < last_end:
         window_end = current_start + window
         while start_idx < n and entries[start_idx]["start"] < current_start:
@@ -273,7 +371,6 @@ def sliding_window_chunks_srt(filepath: str, window: int, overlap: int) -> List[
         while idx < n and entries[idx]["start"] < window_end:
             window_entries.append(entries[idx])
             idx += 1
-
         if window_entries:
             merged_text = " ".join([e["text"] for e in window_entries])
             chunk_start = window_entries[0]["start"]
@@ -328,7 +425,7 @@ def sliding_window_chunks_vtt(filepath: str, window: int, overlap: int) -> List[
     return chunks
 
 # ------------------------------------------------------------------
-# ENHANCED METADATA PIPELINE (KeyBERT + optional Mistral LLM)
+# ENHANCED METADATA PIPELINE (unchanged)
 # ------------------------------------------------------------------
 def _parse_llm_output(text: str) -> Dict:
     result = {"summary": "", "themes": [], "entities": [], "tags": []}
@@ -350,24 +447,18 @@ def _enrich_with_llm(full_text: str, domain_hint: str) -> Dict:
     if not MISTRAL_API_KEY:
         return {}
     full_text = full_text[:8000]
-
     prompt = f"""You are an expert content analyst specializing in {domain_hint}. Analyze this video transcript:
-
 Transcript:
 {full_text}
-
 Extract structured metadata following EXACTLY this format:
-
 Summary: <one concise sentence capturing core content>
 Themes: <theme1>, <theme2>, <theme3>, <theme4>
 Entities: <person1>, <person2>, <organization1>, <location1>
 Tags: <tag1>, <tag2>, <tag3>, <tag4>, <tag5>, <tag6>, <tag7>, <tag8>, <tag9>, <tag10>
-
 Rules:
-- Be specific and concrete (avoid generic terms like "video" or "content")
+- Be specific and concrete
 - Prioritize named entities and domain-specific concepts
-- Tags should enable precise search and ad targeting
-- Output ONLY the four sections above with no extra text
+- Output ONLY the four sections above
 """
     try:
         client = Mistral(api_key=MISTRAL_API_KEY)
@@ -383,7 +474,6 @@ Rules:
         return {}
 
 def generate_enhanced_metadata(full_text: str, filename: str, domain_hint: str = "general content") -> Dict:
-    # Stage 1: KeyBERT semantic keywords (diverse)
     keywords = kw_model.extract_keywords(
         full_text[:5000],
         keyphrase_ngram_range=(1, 3),
@@ -392,11 +482,7 @@ def generate_enhanced_metadata(full_text: str, filename: str, domain_hint: str =
         diversity=0.7
     )
     semantic_tags = [kw[0] for kw in keywords]
-
-    # Stage 2: LLM enrichment (optional)
     llm_meta = _enrich_with_llm(full_text, domain_hint)
-
-    # Stage 3: Merge results
     merged = {
         "summary": llm_meta.get("summary", " ".join(semantic_tags[:3])),
         "themes": llm_meta.get("themes", semantic_tags[:5]),
@@ -404,7 +490,7 @@ def generate_enhanced_metadata(full_text: str, filename: str, domain_hint: str =
         "tags": {
             "primary": llm_meta.get("tags", [])[:5],
             "secondary": semantic_tags[5:10],
-            "keywords": semantic_tags[:8]  # simple fallback
+            "keywords": semantic_tags[:8]
         },
         "confidence": {
             "summary": 0.9 if llm_meta.get("summary") else 0.6,
@@ -417,15 +503,12 @@ def generate_enhanced_metadata(full_text: str, filename: str, domain_hint: str =
     return merged
 
 # ------------------------------------------------------------------
-# PROCESS FILE (deduplication, embeddings, metadata)
+# PROCESS FILE (unchanged)
 # ------------------------------------------------------------------
 def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint: str = "general content") -> Tuple[Optional[int], Optional[str]]:
     if not COLLECTION_VALID:
         return None, "Database is invalid. Please reset."
-
     file_hash = get_file_hash(uploaded_file.getvalue())
-
-    # Deduplication
     existing = collection.get(where={"file_hash": file_hash})
     if existing['ids']:
         filename = existing['metadatas'][0].get('filename')
@@ -434,13 +517,10 @@ def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint
             all_texts = existing['documents']
             st.session_state.full_texts[filename] = " ".join(all_texts)
         return len(existing['ids']), None
-
     with tempfile.NamedTemporaryFile(delete=False, suffix=uploaded_file.name) as tmp:
         tmp.write(uploaded_file.getvalue())
         tmp_path = tmp.name
-
     filename = uploaded_file.name
-
     if filename.endswith('.srt'):
         chunks = sliding_window_chunks_srt(tmp_path, window, overlap)
     elif filename.endswith('.vtt'):
@@ -448,12 +528,10 @@ def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint
     else:
         os.unlink(tmp_path)
         return None, "Unsupported file type."
-
     valid_chunks = [c for c in chunks if c["text"].strip() and len(c["text"]) > 10]
     if not valid_chunks:
         os.unlink(tmp_path)
         return 0, "No valid subtitle content found."
-
     texts = [c["text"] for c in valid_chunks]
     metadatas = []
     for c in valid_chunks:
@@ -470,13 +548,10 @@ def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint
             "domain_hint": domain_hint,
             "speaker": "unknown"
         })
-
     embeddings = get_embeddings_batch(texts)
     if len(embeddings) != len(texts):
         os.unlink(tmp_path)
         return None, f"Embedding mismatch: {len(embeddings)} vs {len(texts)}"
-
-    # Per-chunk keyword tags (KeyBERT)
     tags_list = []
     for text in texts:
         keywords = kw_model.extract_keywords(
@@ -489,28 +564,23 @@ def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint
         tags_list.append(tag_string)
     for i, tags in enumerate(tags_list):
         metadatas[i]["tags"] = tags
-
     ids = [f"{filename}_{i}_{uuid.uuid4()}" for i in range(len(texts))]
-
     collection.add(
         embeddings=embeddings,
         documents=texts,
         metadatas=metadatas,
         ids=ids
     )
-
     full_text = " ".join(texts)
     st.session_state.full_texts[filename] = full_text
-
     with st.spinner("🧠 Generating AI metadata..."):
         enriched = generate_enhanced_metadata(full_text, filename, domain_hint)
         st.session_state.enriched_metadata[filename] = enriched
-
     os.unlink(tmp_path)
     return len(valid_chunks), None
 
 # ------------------------------------------------------------------
-# SEARCH WITH DIVERSITY (MMR)
+# 🚀 ENHANCEMENT: Search with adaptive diversity + min score filter
 # ------------------------------------------------------------------
 def diversify_results(results: List[Dict], lambda_param: float = 0.6, top_k: int = 5) -> List[Dict]:
     if len(results) <= top_k:
@@ -518,17 +588,13 @@ def diversify_results(results: List[Dict], lambda_param: float = 0.6, top_k: int
     texts = [r["text"] for r in results]
     embeddings = get_embeddings_batch(texts)
     embeddings = np.array(embeddings)
-
     scores = np.array([r["score"] for r in results])
     scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-9)
-
     selected_indices = []
     remaining_indices = list(range(len(results)))
-
     first_idx = np.argmax(scores)
     selected_indices.append(first_idx)
     remaining_indices.remove(first_idx)
-
     for _ in range(min(top_k, len(results)) - 1):
         if not remaining_indices:
             break
@@ -542,10 +608,16 @@ def diversify_results(results: List[Dict], lambda_param: float = 0.6, top_k: int
         best_idx = remaining_indices[np.argmax(mmr_scores)]
         selected_indices.append(best_idx)
         remaining_indices.remove(best_idx)
-
     return [results[i] for i in selected_indices]
 
-def search_subtitles(query: str, n_final: int = 5, n_candidates: int = 100, diversify: bool = True) -> List[Dict]:
+def search_subtitles(
+    query: str,
+    n_final: int = 5,
+    n_candidates: int = 100,
+    diversify: bool = True,
+    lambda_param: float = 0.6,
+    min_score: float = -10.0
+) -> List[Dict]:
     if not COLLECTION_VALID:
         return []
     try:
@@ -557,22 +629,22 @@ def search_subtitles(query: str, n_final: int = 5, n_candidates: int = 100, dive
         )
         if not results['ids'][0]:
             return []
-
         pairs = [[query, doc] for doc in results['documents'][0]]
         cross_scores = cross_encoder.predict(pairs)
-
         reranked = []
         for i in range(len(results['ids'][0])):
+            score = float(cross_scores[i])
+            if score < min_score:
+                continue
             reranked.append({
-                "score": float(cross_scores[i]),
+                "score": score,
                 "text": results['documents'][0][i],
                 "metadata": results['metadatas'][0][i],
                 "id": results['ids'][0][i]
             })
         reranked.sort(key=lambda x: x["score"], reverse=True)
-
         if diversify:
-            reranked = diversify_results(reranked, lambda_param=0.6, top_k=n_final)
+            reranked = diversify_results(reranked, lambda_param=lambda_param, top_k=n_final)
         else:
             reranked = reranked[:n_final]
         return reranked
@@ -642,6 +714,7 @@ with st.sidebar:
 
     st.divider()
 
+    # 🚀 ENHANCEMENT: Library stats with more metrics
     if COLLECTION_VALID:
         try:
             all_items = collection.get()
@@ -750,6 +823,15 @@ with st.sidebar:
 st.title("🔍 Semantic Video Search")
 st.markdown("Find exact moments using natural language. *Powered by subtitle semantics + AI enrichment.*")
 
+# 🚀 ENHANCEMENT: Search history dropdown (quick re-runs)
+if st.session_state.search_history:
+    with st.expander("📜 Search History", expanded=False):
+        cols = st.columns(5)
+        for idx, (past_query, timestamp) in enumerate(list(reversed(st.session_state.search_history))[:5]):
+            if cols[idx % 5].button(f"\"{past_query[:15]}...\"", key=f"history_{idx}"):
+                st.session_state.last_query = past_query
+                st.rerun()
+
 search_container = st.container()
 with search_container:
     col_search, col_opts = st.columns([4, 1])
@@ -764,36 +846,108 @@ with search_container:
         if st.button("⚙️", help="Advanced options"):
             st.session_state.show_advanced = not st.session_state.show_advanced
 
+    # 🚀 ENHANCEMENT: Advanced options with adaptive diversity & score filter
     if st.session_state.show_advanced:
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
             n_results = st.number_input("Results", 1, 20, 5)
         with col2:
             diversify = st.checkbox("Diversify", value=True, help="Show varied moments vs. similar repeats")
         with col3:
-            n_candidates = st.number_input("Candidates", 20, 200, 100, step=10,
-                                           help="Number of raw scenes retrieved before reranking. Higher = better recall, slower.")
+            lambda_param = st.slider("Diversity λ", 0.0, 1.0, 0.6, 0.1,
+                                    help="Higher = more relevance, Lower = more diversity")
+        with col4:
+            min_score = st.slider("Min score", -5.0, 5.0, -3.0, 0.5,
+                                 help="Filter out low-confidence results")
+        n_candidates = st.number_input("Candidates", 20, 200, 100, step=10,
+                                       help="Number of raw scenes retrieved before reranking.")
     else:
         n_results = 5
         diversify = True
+        lambda_param = 0.6
+        min_score = -3.0
         n_candidates = 100
 
 st.divider()
 
+# 🚀 ENHANCEMENT: Filter by filename (if multiple files exist)
+if files_indexed and len(files_indexed) > 1:
+    with st.expander("🎯 Filter by Video", expanded=False):
+        filename_filter = st.selectbox(
+            "Narrow search to a specific video",
+            ["All files"] + sorted(files_indexed),
+            index=0
+        )
+        st.session_state.filter_filename = filename_filter if filename_filter != "All files" else None
+else:
+    st.session_state.filter_filename = None
+
 if query and COLLECTION_VALID:
+    # Add to search history
+    if query != st.session_state.last_query:
+        st.session_state.search_history.append((query, datetime.now().strftime("%H:%M")))
+        # Keep only last 20 searches
+        st.session_state.search_history = st.session_state.search_history[-20:]
     st.session_state.last_query = query
 
-    with st.status("🔍 Searching library...", expanded=False) as status:
-        results = search_subtitles(
-            query,
-            n_final=n_results,
-            n_candidates=n_candidates,
-            diversify=diversify
-        )
-        status.update(label=f"✅ Found {len(results)} relevant moments", state="complete")
+    # 🚀 ENHANCEMENT: Query rewriting with Mistral
+    rewritten_query = rewrite_query_with_llm(query)
+    if rewritten_query != query and MISTRAL_API_KEY:
+        st.caption(f"✨ Expanded query: *{rewritten_query}*")
+
+    # 🚀 ENHANCEMENT: Check cache
+    cached = get_cached_results(rewritten_query, n_candidates)
+    if cached is not None:
+        results = cached
+        st.toast("⚡ Results loaded from cache", icon="⚡")
+    else:
+        with st.status("🔍 Searching library...", expanded=False) as status:
+            results = search_subtitles(
+                rewritten_query,
+                n_final=n_results,
+                n_candidates=n_candidates,
+                diversify=diversify,
+                lambda_param=lambda_param,
+                min_score=min_score
+            )
+            # Apply filename filter if active
+            if st.session_state.filter_filename:
+                results = [r for r in results if r['metadata']['filename'] == st.session_state.filter_filename]
+            cache_results(rewritten_query, n_candidates, results)
+            status.update(label=f"✅ Found {len(results)} relevant moments", state="complete")
 
     if results:
-        for i, r in enumerate(results):
+        # 🚀 ENHANCEMENT: Export all results as CSV
+        if len(results) > 0:
+            export_df = pd.DataFrame([
+                {
+                    "Scene": i+1,
+                    "File": r['metadata']['filename'],
+                    "Timecode": r['metadata']['timecode'],
+                    "Duration": r['metadata']['duration'],
+                    "Confidence": f"{max(0, (r['score']+5)/20*100):.0f}%",
+                    "Text": r['text'][:200]
+                } for i, r in enumerate(results)
+            ])
+            csv = export_df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                "📥 Export All Results (CSV)",
+                data=csv,
+                file_name=f"cairo_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+        # Display results with pagination
+        results_per_page = 5
+        if 'result_offset' not in st.session_state:
+            st.session_state.result_offset = 0
+
+        start_idx = st.session_state.result_offset
+        end_idx = min(start_idx + results_per_page, len(results))
+        displayed_results = results[start_idx:end_idx]
+
+        for i, r in enumerate(displayed_results, start=start_idx):
             meta = r["metadata"]
             score = r["score"]
             norm_score = max(0.0, min(1.0, (score + 5) / 20))
@@ -835,9 +989,20 @@ if query and COLLECTION_VALID:
 
                 st.markdown('</div>', unsafe_allow_html=True)
                 st.divider()
-    else:
-        st.warning("No relevant moments found. Try rephrasing your query or uploading more content.")
 
+        # 🚀 ENHANCEMENT: Load more button (pagination)
+        if end_idx < len(results):
+            if st.button("⬇️ Load more results", use_container_width=True):
+                st.session_state.result_offset = end_idx
+                st.rerun()
+        elif st.session_state.result_offset > 0:
+            if st.button("⬆️ Show fewer", use_container_width=True):
+                st.session_state.result_offset = 0
+                st.rerun()
+    else:
+        st.warning("No relevant moments found. Try rephrasing your query, lowering the min score, or uploading more content.")
+
+    # 🚀 ENHANCEMENT: Selected moment detail (unchanged)
     if st.session_state.selected_result:
         st.divider()
         st.subheader("🎬 Selected Moment")
