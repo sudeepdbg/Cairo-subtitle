@@ -59,6 +59,9 @@ _DEFAULT_STATE = {
     "last_youtube_url": "",
     "current_youtube_id": None,
     "youtube_status": {},             # dict mapping video_id -> status: 'indexed', 'not_found', 'error'
+    # Player state
+    "currently_playing": None,        # unique identifier for the currently playing video (e.g., filename_start)
+    "pending_switch": None,            # stores the result object to switch to after confirmation
 }
 for key, val in _DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -1386,21 +1389,16 @@ if query and COLLECTION_VALID:
 
                 col_b1, col_b2 = st.columns(2)
                 with col_b1:
-                    video_url = video_meta.get('video_url', '')
-                    if video_url and 'youtu' in video_url:
-                        t = int(meta['start'])
-                        if 'watch?v=' in video_url:
-                            base = video_url.split('&')[0]
-                            jump_url = f"{base}&t={t}s"
-                        elif 'youtu.be/' in video_url:
-                            base = video_url.split('?')[0]
-                            jump_url = f"{base}?t={t}s"
+                    # --- UPDATED JUMP TO BUTTON ---
+                    if st.button("▶️ Jump to", key=f"jump_{i}", use_container_width=True):
+                        # If something is already playing, ask for confirmation
+                        if st.session_state.currently_playing is not None:
+                            st.session_state.pending_switch = r
+                            st.rerun()
                         else:
-                            jump_url = video_url
-                        st.link_button("▶️ Jump to", jump_url, use_container_width=True)
-                    else:
-                        if st.button("▶️ Jump to", key=f"jump_{i}", use_container_width=True):
+                            # Nothing playing – load immediately
                             st.session_state.selected_result = r
+                            st.session_state.currently_playing = f"{meta['filename']}_{meta['start']}"
                             st.rerun()
                 with col_b2:
                     st.download_button(
@@ -1411,6 +1409,24 @@ if query and COLLECTION_VALID:
                         use_container_width=True
                     )
                 st.markdown('</div>', unsafe_allow_html=True)
+
+        # --- CONFIRMATION POPOVER FOR PENDING SWITCH ---
+        if st.session_state.pending_switch is not None:
+            with st.popover("🎬 Switch Video", use_container_width=True):
+                st.warning("A video is already playing. Do you want to switch to the new moment?")
+                col_yes, col_no = st.columns(2)
+                with col_yes:
+                    if st.button("Yes, switch", use_container_width=True):
+                        r = st.session_state.pending_switch
+                        meta = r['metadata']
+                        st.session_state.selected_result = r
+                        st.session_state.currently_playing = f"{meta['filename']}_{meta['start']}"
+                        st.session_state.pending_switch = None
+                        st.rerun()
+                with col_no:
+                    if st.button("No, keep current", use_container_width=True):
+                        st.session_state.pending_switch = None
+                        st.rerun()
 
         if end < len(results):
             if st.button("⬇️ Load more", use_container_width=True):
@@ -1428,7 +1444,9 @@ elif COLLECTION_VALID and total_chunks == 0:
 else:
     st.info("✨ Enter a query above to search your library.")
 
-# Selected moment detail (for non-YouTube videos, or if Jump to didn't redirect)
+# ------------------------------------------------------------------
+# SELECTED MOMENT DETAIL (with embedded YouTube player)
+# ------------------------------------------------------------------
 if st.session_state.selected_result:
     st.divider()
     st.subheader("🎬 Selected Moment")
@@ -1483,4 +1501,5 @@ if st.session_state.selected_result:
 
     if st.button("← Back"):
         st.session_state.selected_result = None
+        st.session_state.currently_playing = None  # also stop playing
         st.rerun()
