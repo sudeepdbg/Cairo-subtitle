@@ -332,7 +332,16 @@ def extract_youtube_video_id(url: str) -> Optional[str]:
     return None
 
 def fetch_youtube_subtitles(video_id: str, languages=['en']) -> Optional[List[Dict]]:
-    """Fetch YouTube subtitles and return as list of dicts with start, text, duration."""
+    """Fetch YouTube subtitles with multiple fallback methods."""
+    # Diagnostic: print module info (remove after debugging)
+    try:
+        import youtube_transcript_api
+        st.write(f"Module path: {youtube_transcript_api.__file__}")
+        st.write(f"Module version: {youtube_transcript_api.__version__}")
+    except:
+        st.warning("Cannot inspect youtube_transcript_api module")
+    
+    # Method 1: get_transcript (standard)
     try:
         transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
         subtitles = []
@@ -344,8 +353,32 @@ def fetch_youtube_subtitles(video_id: str, languages=['en']) -> Optional[List[Di
             })
         return subtitles
     except Exception as e:
-        st.warning(f"Could not fetch YouTube subtitles: {e}")
-        return None
+        st.warning(f"Method 1 failed: {e}")
+    
+    # Method 2: try using list_transcripts + find_generated (older API)
+    try:
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        # Try manual transcript first, then auto-generated
+        transcript = None
+        try:
+            transcript = transcript_list.find_manually_created_transcript(languages)
+        except:
+            try:
+                transcript = transcript_list.find_generated_transcript(languages)
+            except:
+                pass
+        if transcript:
+            transcript_data = transcript.fetch()
+            subtitles = [{
+                "start": entry['start'],
+                "end": entry['start'] + entry['duration'],
+                "text": entry['text']
+            } for entry in transcript_data]
+            return subtitles
+    except Exception as e:
+        st.warning(f"Method 2 failed: {e}")
+    
+    return None
 
 # ------------------------------------------------------------------
 # BUILD BM25 INDEX (with error handling)
