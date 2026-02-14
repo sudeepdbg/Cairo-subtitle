@@ -271,6 +271,36 @@ st.session_state.video_meta_collection = video_meta_collection
 COLLECTION_VALID = scene_collection is not None
 
 # ------------------------------------------------------------------
+# LOAD VIDEO METADATA FROM DB INTO SESSION (with error handling)
+# ------------------------------------------------------------------
+def load_video_metadata_into_session():
+    """Safely load video metadata from ChromaDB into session state and parse JSON fields."""
+    if st.session_state.video_meta_collection is None:
+        return
+    try:
+        all_videos = st.session_state.video_meta_collection.get()
+        for i, vid_id in enumerate(all_videos['ids']):
+            meta = all_videos['metadatas'][i]
+            filename = meta.get('filename')
+            if filename:
+                # Parse JSON fields back to Python objects
+                parsed_meta = {}
+                for key, value in meta.items():
+                    if isinstance(value, str) and value.startswith(('{', '[')):
+                        try:
+                            parsed_meta[key] = json.loads(value)
+                        except:
+                            parsed_meta[key] = value
+                    else:
+                        parsed_meta[key] = value
+                st.session_state.enriched_metadata[filename] = parsed_meta
+    except Exception as e:
+        st.warning(f"⚠️ Could not load video metadata: {e}")
+        st.session_state.video_meta_collection = None
+
+load_video_metadata_into_session()
+
+# ------------------------------------------------------------------
 # HELPER FUNCTIONS
 # ------------------------------------------------------------------
 def get_file_hash(file_content: bytes) -> str:
@@ -287,46 +317,35 @@ def get_embeddings_batch(texts: List[str], batch_size: int = 64) -> List[List[fl
         normalize_embeddings=True
     ).tolist()
 
+# ------------------------------------------------------------------
+# BUILD BM25 INDEX (with error handling)
+# ------------------------------------------------------------------
 def build_bm25_index():
-    """Build BM25 index from all documents in ChromaDB."""
-    if not COLLECTION_VALID:
-        return
-    all_items = scene_collection.get()
-    if not all_items['documents']:
+    """Build BM25 index from all documents in ChromaDB, if collection is valid."""
+    if not COLLECTION_VALID or scene_collection is None:
         st.session_state.bm25_index = None
         st.session_state.bm25_docs = []
         st.session_state.bm25_doc_ids = []
         return
-    tokenized_docs = [re.findall(r'\w+', doc.lower()) for doc in all_items['documents']]
-    st.session_state.bm25_index = BM25Okapi(tokenized_docs)
-    st.session_state.bm25_docs = all_items['documents']
-    st.session_state.bm25_doc_ids = all_items['ids']
-
-# Build BM25 index on startup
-build_bm25_index()
-
-# ------------------------------------------------------------------
-# LOAD VIDEO METADATA FROM DB INTO SESSION (with error handling)
-# ------------------------------------------------------------------
-def load_video_metadata_into_session():
-    """Safely load video metadata from ChromaDB into session state."""
-    if st.session_state.video_meta_collection is None:
-        return
     try:
-        all_videos = st.session_state.video_meta_collection.get()
-        for i, vid_id in enumerate(all_videos['ids']):
-            meta = all_videos['metadatas'][i]
-            filename = meta.get('filename')
-            if filename:
-                st.session_state.enriched_metadata[filename] = meta
+        all_items = scene_collection.get()
+        if not all_items['documents']:
+            st.session_state.bm25_index = None
+            st.session_state.bm25_docs = []
+            st.session_state.bm25_doc_ids = []
+            return
+        tokenized_docs = [re.findall(r'\w+', doc.lower()) for doc in all_items['documents']]
+        st.session_state.bm25_index = BM25Okapi(tokenized_docs)
+        st.session_state.bm25_docs = all_items['documents']
+        st.session_state.bm25_doc_ids = all_items['ids']
     except Exception as e:
-        # Log the error and continue – the session will start empty
-        st.warning(f"⚠️ Could not load video metadata: {e}")
-        # Reset the collection reference to force re‑initialization
-        st.session_state.video_meta_collection = None
+        st.warning(f"⚠️ Could not build BM25 index: {e}")
+        st.session_state.bm25_index = None
+        st.session_state.bm25_docs = []
+        st.session_state.bm25_doc_ids = []
 
-# Call it AFTER ensuring the collection might exist
-load_video_metadata_into_session()
+# Build BM25 index on startup (safe call)
+build_bm25_index()
 
 # ------------------------------------------------------------------
 # DOMAIN DETECTION & QUERY REWRITING
@@ -603,7 +622,9 @@ Rules:
     return {}
 
 def generate_video_metadata(full_text: str, filename: str, domain_hint: str) -> Dict:
-    """Generate video-level metadata by combining LLM and KeyBERT."""
+    """Generate video-level metadata by combining LLM and KeyBERT.
+       Returns a dictionary where all list/dict values are JSON-encoded strings
+       for ChromaDB compatibility."""
     # LLM enrichment
     llm_meta = enrich_with_llm(full_text, domain_hint)
 
@@ -625,14 +646,14 @@ def generate_video_metadata(full_text: str, filename: str, domain_hint: str) -> 
             if key in kw_lower:
                 iab_categories.update(cats)
 
-    # Combine
-    metadata = {
+    # Build the raw metadata (with lists/dicts)
+    raw_meta = {
         "filename": filename,
         "domain_hint": domain_hint,
         "summary": llm_meta.get("summary", " ".join(keyword_tags[:3])),
         "themes": llm_meta.get("themes", keyword_tags[:8]),
         "entities": llm_meta.get("entities", []),
-        "iab_categories": list(iab_categories) if iab_categories else ["IAB1"],  # fallback to Entertainment
+        "iab_categories": list(iab_categories) if iab_categories else ["IAB1"],
         "sentiment": llm_meta.get("sentiment", "neutral"),
         "tone": llm_meta.get("tone", "general"),
         "keywords": keyword_tags[:15],
@@ -647,7 +668,16 @@ def generate_video_metadata(full_text: str, filename: str, domain_hint: str) -> 
         "user_tags": [],
         "created_at": time.time()
     }
-    return metadata
+
+    # Convert all list/dict values to JSON strings for ChromaDB storage
+    encoded_meta = {}
+    for key, value in raw_meta.items():
+        if isinstance(value, (list, dict)):
+            encoded_meta[key] = json.dumps(value)
+        else:
+            encoded_meta[key] = value
+
+    return encoded_meta
 
 # ------------------------------------------------------------------
 # PROCESS FILE (with video metadata storage)
@@ -830,8 +860,17 @@ def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint
             metadatas=[video_meta],
             documents=[full_text[:1000]]  # store preview
         )
-        # Also update session cache
-        st.session_state.enriched_metadata[filename] = video_meta
+        # Also update session cache (decode JSON for internal use)
+        decoded_meta = {}
+        for key, value in video_meta.items():
+            if isinstance(value, str) and value.startswith(('{', '[')):
+                try:
+                    decoded_meta[key] = json.loads(value)
+                except:
+                    decoded_meta[key] = value
+            else:
+                decoded_meta[key] = value
+        st.session_state.enriched_metadata[filename] = decoded_meta
 
     os.unlink(tmp_path)
     # Rebuild BM25 index
@@ -882,15 +921,18 @@ def render_editable_tags(video_filename: str, current_tags: List[str], key_prefi
                 if st.button("➕ Add", key=f"add_{video_filename}_{key_prefix}"):
                     if new_tag and new_tag not in tags:
                         tags.append(new_tag)
-                        # Update in DB
+                        # Update in DB and session
                         video_meta = st.session_state.enriched_metadata.get(video_filename, {})
                         video_meta["user_tags"] = tags
-                        # Update in ChromaDB
+                        # Encode user_tags as JSON for ChromaDB
+                        encoded_meta = {
+                            "user_tags": json.dumps(tags)
+                        }
                         existing_video = video_meta_collection.get(where={"filename": video_filename})
                         if existing_video['ids']:
                             video_meta_collection.update(
                                 ids=[existing_video['ids'][0]],
-                                metadatas=[video_meta]
+                                metadatas=[encoded_meta]
                             )
                         st.rerun()
             with col_done:
@@ -906,11 +948,14 @@ def render_editable_tags(video_filename: str, current_tags: List[str], key_prefi
                         tags.remove(tag)
                         video_meta = st.session_state.enriched_metadata.get(video_filename, {})
                         video_meta["user_tags"] = tags
+                        encoded_meta = {
+                            "user_tags": json.dumps(tags)
+                        }
                         existing_video = video_meta_collection.get(where={"filename": video_filename})
                         if existing_video['ids']:
                             video_meta_collection.update(
                                 ids=[existing_video['ids'][0]],
-                                metadatas=[video_meta]
+                                metadatas=[encoded_meta]
                             )
                         st.rerun()
 
