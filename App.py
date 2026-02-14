@@ -288,37 +288,22 @@ load_video_metadata_into_session()
 # ------------------------------------------------------------------
 # HELPER FUNCTIONS
 # ------------------------------------------------------------------
-def get_file_hash(file_content: bytes) -> str:
-    return hashlib.md5(file_content).hexdigest()
-
-def get_embeddings_batch(texts: List[str], batch_size: int = 64) -> List[List[float]]:
-    if not texts:
-        return []
-    texts = [t if t.strip() else " " for t in texts]
-    return bi_encoder.encode(
-        texts,
-        batch_size=batch_size,
-        show_progress_bar=False,
-        normalize_embeddings=True
-    ).tolist()
-
-def build_bm25_index():
-    """Build BM25 index from all documents in ChromaDB."""
-    if not COLLECTION_VALID:
+def load_video_metadata_into_session():
+    """Safely load video metadata from ChromaDB into session state."""
+    if video_meta_collection is None:
         return
-    all_items = scene_collection.get()
-    if not all_items['documents']:
-        st.session_state.bm25_index = None
-        st.session_state.bm25_docs = []
-        st.session_state.bm25_doc_ids = []
-        return
-    tokenized_docs = [re.findall(r'\w+', doc.lower()) for doc in all_items['documents']]
-    st.session_state.bm25_index = BM25Okapi(tokenized_docs)
-    st.session_state.bm25_docs = all_items['documents']
-    st.session_state.bm25_doc_ids = all_items['ids']
-
-# Build BM25 index on startup
-build_bm25_index()
+    try:
+        all_videos = video_meta_collection.get()
+        for i, vid_id in enumerate(all_videos['ids']):
+            meta = all_videos['metadatas'][i]
+            filename = meta.get('filename')
+            if filename:
+                st.session_state.enriched_metadata[filename] = meta
+    except Exception as e:
+        # Log the error (optional) and continue – the session will start empty
+        st.warning(f"⚠️ Could not load video metadata: {e}")
+        # Reset the collection reference to force re‑initialization
+        st.session_state.video_meta_collection = None
 
 # ------------------------------------------------------------------
 # DOMAIN DETECTION & QUERY REWRITING
