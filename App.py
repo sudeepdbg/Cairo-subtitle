@@ -1389,7 +1389,7 @@ if query and COLLECTION_VALID:
 
                 col_b1, col_b2 = st.columns(2)
                 with col_b1:
-                    # --- UPDATED JUMP TO BUTTON ---
+                    # --- JUMP TO BUTTON WITH CONFIRMATION ---
                     if st.button("▶️ Jump to", key=f"jump_{i}", use_container_width=True):
                         # If something is already playing, ask for confirmation
                         if st.session_state.currently_playing is not None:
@@ -1445,7 +1445,7 @@ else:
     st.info("✨ Enter a query above to search your library.")
 
 # ------------------------------------------------------------------
-# SELECTED MOMENT DETAIL (with embedded YouTube player)
+# SELECTED MOMENT DETAIL (with embedded YouTube player using iframe)
 # ------------------------------------------------------------------
 if st.session_state.selected_result:
     st.divider()
@@ -1461,14 +1461,21 @@ if st.session_state.selected_result:
             t = int(meta_sel['start'])
             if 'watch?v=' in video_url:
                 video_id = video_url.split('v=')[1].split('&')[0]
-                embed_url = f"https://www.youtube.com/embed/{video_id}?start={t}"
             elif 'youtu.be/' in video_url:
                 video_id = video_url.split('/')[-1].split('?')[0]
-                embed_url = f"https://www.youtube.com/embed/{video_id}?start={t}"
             else:
-                embed_url = None
-            if embed_url:
-                st.video(embed_url)
+                video_id = None
+            if video_id:
+                # Build embed URL with start time and autoplay
+                embed_url = f"https://www.youtube.com/embed/{video_id}?start={t}&autoplay=1&enablejsapi=1"
+                # Use iframe to ensure start time works
+                iframe_html = f"""
+                <iframe width="100%" height="400" src="{embed_url}" 
+                        title="YouTube video player" frameborder="0" 
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+                        allowfullscreen></iframe>
+                """
+                st.components.v1.html(iframe_html, height=410)
             else:
                 st.markdown('<div class="video-preview-placeholder">🎬 YouTube video (embed failed)</div>', unsafe_allow_html=True)
         else:
@@ -1501,5 +1508,5 @@ if st.session_state.selected_result:
 
     if st.button("← Back"):
         st.session_state.selected_result = None
-        st.session_state.currently_playing = None  # also stop playing
+        st.session_state.currently_playing = None
         st.rerun()
