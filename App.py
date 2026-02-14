@@ -55,6 +55,9 @@ _DEFAULT_STATE = {
     "bm25_docs": [],
     "bm25_doc_ids": [],
     "iab_taxonomy": None,
+    # YouTube fallback state
+    "last_youtube_url": "",
+    "youtube_status": {},             # dict mapping video_id -> status: 'indexed', 'not_found', 'error'
 }
 for key, val in _DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -332,16 +335,7 @@ def extract_youtube_video_id(url: str) -> Optional[str]:
     return None
 
 def fetch_youtube_subtitles(video_id: str, languages=['en']) -> Optional[List[Dict]]:
-    """Fetch YouTube subtitles with multiple fallback methods."""
-    # Diagnostic: print module info (remove after debugging)
-    try:
-        import youtube_transcript_api
-        st.write(f"Module path: {youtube_transcript_api.__file__}")
-        st.write(f"Module version: {youtube_transcript_api.__version__}")
-    except:
-        st.warning("Cannot inspect youtube_transcript_api module")
-    
-    # Method 1: get_transcript (standard)
+    """Fetch YouTube subtitles and return as list of dicts with start, text, duration."""
     try:
         transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
         subtitles = []
@@ -353,32 +347,9 @@ def fetch_youtube_subtitles(video_id: str, languages=['en']) -> Optional[List[Di
             })
         return subtitles
     except Exception as e:
-        st.warning(f"Method 1 failed: {e}")
-    
-    # Method 2: try using list_transcripts + find_generated (older API)
-    try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        # Try manual transcript first, then auto-generated
-        transcript = None
-        try:
-            transcript = transcript_list.find_manually_created_transcript(languages)
-        except:
-            try:
-                transcript = transcript_list.find_generated_transcript(languages)
-            except:
-                pass
-        if transcript:
-            transcript_data = transcript.fetch()
-            subtitles = [{
-                "start": entry['start'],
-                "end": entry['start'] + entry['duration'],
-                "text": entry['text']
-            } for entry in transcript_data]
-            return subtitles
-    except Exception as e:
-        st.warning(f"Method 2 failed: {e}")
-    
-    return None
+        # Fallback to older method if needed (but we keep it simple)
+        st.warning(f"Could not fetch YouTube subtitles: {e}")
+        return None
 
 # ------------------------------------------------------------------
 # BUILD BM25 INDEX (with error handling)
@@ -806,7 +777,7 @@ def sliding_window_chunks_vtt(filepath: str, window: int, overlap: int) -> List[
             })
     return sliding_window_chunks_from_entries(entries, window, overlap)
 
-def process_video_source(source_type: str, source_identifier: str, window: int, overlap: int, domain_hint: str, video_url: Optional[str] = None) -> Tuple[Optional[int], Optional[str]]:
+def process_video_source(source_type: str, source_identifier: str, window: int, overlap: int, domain_hint: str, video_url: Optional[str] = None, uploaded_file: Optional[bytes] = None) -> Tuple[Optional[int], Optional[str]]:
     """Common function to process a video from either file or YouTube URL."""
     if not COLLECTION_VALID:
         return None, "Database is invalid. Please reset."
@@ -815,6 +786,7 @@ def process_video_source(source_type: str, source_identifier: str, window: int, 
         video_id = source_identifier
         filename = f"YouTube_{video_id}"
         file_hash = hashlib.md5(video_id.encode()).hexdigest()
+        # Check if already indexed (using video_id as hash)
         existing = scene_collection.get(where={"file_hash": file_hash})
         if existing['ids']:
             st.info(f"✅ YouTube video {video_id} already indexed")
@@ -823,11 +795,20 @@ def process_video_source(source_type: str, source_identifier: str, window: int, 
                 st.session_state.full_texts[filename] = " ".join(all_texts)
             return len(existing['ids']), None
 
-        # Fetch subtitles
-        entries = fetch_youtube_subtitles(video_id)
-        if not entries:
-            return None, "No subtitles found for this YouTube video."
-        chunks = sliding_window_chunks_from_entries(entries, window, overlap)
+        if uploaded_file is None:
+            # Fetch subtitles from YouTube
+            entries = fetch_youtube_subtitles(video_id)
+            if not entries:
+                return None, "No subtitles found for this YouTube video."
+            chunks = sliding_window_chunks_from_entries(entries, window, overlap)
+        else:
+            # Use uploaded SRT file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".srt") as tmp:
+                tmp.write(uploaded_file)
+                tmp_path = tmp.name
+            chunks = sliding_window_chunks_srt(tmp_path, window, overlap)
+            os.unlink(tmp_path)
+
         valid_chunks = [c for c in chunks if c["text"].strip() and len(c["text"]) > 10]
         if not valid_chunks:
             return 0, "No valid subtitle content found."
@@ -1136,22 +1117,54 @@ with st.sidebar:
                 else:
                     st.success(f"✅ {cnt} scenes")
 
+    st.divider()
     st.write("**Or ingest from YouTube**")
-    youtube_url = st.text_input("YouTube URL", placeholder="https://youtu.be/...", key="youtube_url")
-    if st.button("📥 Fetch YouTube Subtitles", use_container_width=True):
-        if youtube_url:
-            video_id = extract_youtube_video_id(youtube_url)
-            if video_id:
-                with st.status(f"Fetching subtitles for {video_id}...", expanded=False):
-                    cnt, err = process_video_source("youtube", video_id, window_size, overlap, domain_hint, youtube_url)
-                    if err:
-                        st.error(err)
-                    else:
-                        st.success(f"✅ {cnt} scenes indexed")
+
+    # YouTube URL input – on Enter, it will trigger a rerun and we'll process
+    youtube_url = st.text_input("YouTube URL", placeholder="https://youtu.be/...", key="youtube_url_input")
+
+    # Check if URL changed and process
+    if youtube_url and youtube_url != st.session_state.last_youtube_url:
+        st.session_state.last_youtube_url = youtube_url
+        video_id = extract_youtube_video_id(youtube_url)
+        if video_id:
+            # Check if already indexed
+            file_hash = hashlib.md5(video_id.encode()).hexdigest()
+            existing = scene_collection.get(where={"file_hash": file_hash})
+            if existing['ids']:
+                st.info(f"✅ YouTube video {video_id} already indexed")
+                st.session_state.youtube_status[video_id] = 'indexed'
             else:
-                st.error("Invalid YouTube URL")
+                with st.status(f"Fetching subtitles for {video_id}...", expanded=False):
+                    entries = fetch_youtube_subtitles(video_id)
+                    if entries:
+                        cnt, err = process_video_source("youtube", video_id, window_size, overlap, domain_hint, youtube_url)
+                        if err:
+                            st.error(err)
+                            st.session_state.youtube_status[video_id] = 'error'
+                        else:
+                            st.success(f"✅ {cnt} scenes indexed from YouTube")
+                            st.session_state.youtube_status[video_id] = 'indexed'
+                    else:
+                        st.warning("No subtitles found for this YouTube video.")
+                        st.session_state.youtube_status[video_id] = 'not_found'
         else:
-            st.warning("Please enter a YouTube URL")
+            st.error("Invalid YouTube URL")
+
+    # If a video has 'not_found' status, offer fallback upload
+    if video_id and st.session_state.youtube_status.get(video_id) == 'not_found':
+        st.write(f"**Upload SRT file for video {video_id}**")
+        uploaded_srt = st.file_uploader(f"SRT for {video_id}", type=['srt', 'vtt'], key=f"srt_upload_{video_id}")
+        if uploaded_srt:
+            with st.status(f"Processing uploaded SRT for {video_id}...", expanded=False):
+                cnt, err = process_video_source("youtube", video_id, window_size, overlap, domain_hint, youtube_url, uploaded_file=uploaded_srt.getvalue())
+                if err:
+                    st.error(err)
+                    st.session_state.youtube_status[video_id] = 'error'
+                else:
+                    st.success(f"✅ {cnt} scenes indexed (manual SRT)")
+                    st.session_state.youtube_status[video_id] = 'indexed'
+                    st.rerun()  # to clear the uploader
 
     st.divider()
 
@@ -1196,6 +1209,8 @@ with st.sidebar:
             st.session_state.video_meta_collection = None
             st.session_state.enriched_metadata = {}
             st.session_state.full_texts = {}
+            st.session_state.last_youtube_url = ""
+            st.session_state.youtube_status = {}
             st.rerun()
 
 # ------------------------------------------------------------------
@@ -1375,6 +1390,7 @@ if query and COLLECTION_VALID:
                                 jump_url = f"{base}?t={t}s"
                             else:
                                 jump_url = video_url
+                            # Open in new tab
                             st.markdown(f'<meta http-equiv="refresh" content="0; url={jump_url}">', unsafe_allow_html=True)
                         else:
                             st.session_state.selected_result = r
