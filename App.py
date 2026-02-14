@@ -1120,14 +1120,15 @@ with st.sidebar:
     st.divider()
     st.write("**Or ingest from YouTube**")
 
-    # YouTube URL input – on Enter, it will trigger a rerun and we'll process
+    # YouTube URL input – on Enter, process
     youtube_url = st.text_input("YouTube URL", placeholder="https://youtu.be/...", key="youtube_url_input")
 
-    # Check if URL changed and process
-    if youtube_url and youtube_url != st.session_state.last_youtube_url:
+    # Process if URL entered and changed
+    if youtube_url and youtube_url != st.session_state.get("last_youtube_url", ""):
         st.session_state.last_youtube_url = youtube_url
         video_id = extract_youtube_video_id(youtube_url)
         if video_id:
+            st.session_state.current_youtube_id = video_id  # store for later use
             # Check if already indexed
             file_hash = hashlib.md5(video_id.encode()).hexdigest()
             existing = scene_collection.get(where={"file_hash": file_hash})
@@ -1151,20 +1152,26 @@ with st.sidebar:
         else:
             st.error("Invalid YouTube URL")
 
-    # If a video has 'not_found' status, offer fallback upload
-    if video_id and st.session_state.youtube_status.get(video_id) == 'not_found':
-        st.write(f"**Upload SRT file for video {video_id}**")
-        uploaded_srt = st.file_uploader(f"SRT for {video_id}", type=['srt', 'vtt'], key=f"srt_upload_{video_id}")
+    # If we have a current video ID and its status is 'not_found', offer fallback upload
+    current_id = st.session_state.get("current_youtube_id")
+    if current_id and st.session_state.youtube_status.get(current_id) == 'not_found':
+        st.write(f"**Upload SRT file for video {current_id}**")
+        uploaded_srt = st.file_uploader(f"SRT for {current_id}", type=['srt', 'vtt'], key=f"srt_upload_{current_id}")
         if uploaded_srt:
-            with st.status(f"Processing uploaded SRT for {video_id}...", expanded=False):
-                cnt, err = process_video_source("youtube", video_id, window_size, overlap, domain_hint, youtube_url, uploaded_file=uploaded_srt.getvalue())
+            with st.status(f"Processing uploaded SRT for {current_id}...", expanded=False):
+                cnt, err = process_video_source(
+                    "youtube", current_id, window_size, overlap, domain_hint,
+                    st.session_state.last_youtube_url, uploaded_file=uploaded_srt.getvalue()
+                )
                 if err:
                     st.error(err)
-                    st.session_state.youtube_status[video_id] = 'error'
+                    st.session_state.youtube_status[current_id] = 'error'
                 else:
                     st.success(f"✅ {cnt} scenes indexed (manual SRT)")
-                    st.session_state.youtube_status[video_id] = 'indexed'
-                    st.rerun()  # to clear the uploader
+                    st.session_state.youtube_status[current_id] = 'indexed'
+                    # Clear the current ID to hide uploader
+                    st.session_state.current_youtube_id = None
+                    st.rerun()
 
     st.divider()
 
@@ -1210,6 +1217,7 @@ with st.sidebar:
             st.session_state.enriched_metadata = {}
             st.session_state.full_texts = {}
             st.session_state.last_youtube_url = ""
+            st.session_state.current_youtube_id = None
             st.session_state.youtube_status = {}
             st.rerun()
 
