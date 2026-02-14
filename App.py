@@ -334,23 +334,9 @@ def extract_youtube_video_id(url: str) -> Optional[str]:
 def fetch_youtube_subtitles(video_id: str, languages=['en']) -> Optional[List[Dict]]:
     """Fetch YouTube subtitles and return as list of dicts with start, text, duration."""
     try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-        # Try to find manual or auto-generated English transcript
-        transcript = None
-        try:
-            transcript = transcript_list.find_manually_created_transcript(languages)
-        except:
-            try:
-                transcript = transcript_list.find_generated_transcript(languages)
-            except:
-                pass
-        if not transcript:
-            return None
-        # Fetch actual transcript
-        transcript_data = transcript.fetch()
-        # Convert to our format (start, end, text)
+        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
         subtitles = []
-        for entry in transcript_data:
+        for entry in transcript:
             subtitles.append({
                 "start": entry['start'],
                 "end": entry['start'] + entry['duration'],
@@ -792,12 +778,9 @@ def process_video_source(source_type: str, source_identifier: str, window: int, 
     if not COLLECTION_VALID:
         return None, "Database is invalid. Please reset."
 
-    # For YouTube, source_identifier is video_id, for file it's file content (handled separately)
     if source_type == "youtube":
         video_id = source_identifier
-        # Create a filename for display
         filename = f"YouTube_{video_id}"
-        # Check if already indexed by hash (using video_id as hash)
         file_hash = hashlib.md5(video_id.encode()).hexdigest()
         existing = scene_collection.get(where={"file_hash": file_hash})
         if existing['ids']:
@@ -812,84 +795,82 @@ def process_video_source(source_type: str, source_identifier: str, window: int, 
         if not entries:
             return None, "No subtitles found for this YouTube video."
         chunks = sliding_window_chunks_from_entries(entries, window, overlap)
+        valid_chunks = [c for c in chunks if c["text"].strip() and len(c["text"]) > 10]
+        if not valid_chunks:
+            return 0, "No valid subtitle content found."
+
+        texts = [c["text"] for c in valid_chunks]
+        metadatas = []
+        for c in valid_chunks:
+            mins = int(c["start"] // 60)
+            secs = int(c["start"] % 60)
+            metadatas.append({
+                "filename": filename,
+                "file_hash": file_hash,
+                "start": c["start"],
+                "end": c["end"],
+                "duration": round(c["end"] - c["start"], 1),
+                "timecode": f"{mins}:{secs:02d}",
+                "subtitle_count": c.get("subtitle_count", 0),
+                "domain_hint": domain_hint,
+                "speaker": "unknown"
+            })
+
+        embeddings = get_embeddings_batch(texts)
+        if len(embeddings) != len(texts):
+            return None, f"Embedding mismatch: {len(embeddings)} vs {len(texts)}"
+
+        # Per-chunk keyword tags (KeyBERT)
+        tags_list = []
+        for text in texts:
+            keywords = kw_model.extract_keywords(
+                text,
+                keyphrase_ngram_range=(1, 2),
+                stop_words='english',
+                top_n=3
+            )
+            tag_string = ", ".join([kw[0] for kw in keywords]) if keywords else "general"
+            tags_list.append(tag_string)
+        for i, tags in enumerate(tags_list):
+            metadatas[i]["tags"] = tags
+
+        ids = [f"{filename}_{i}_{uuid.uuid4()}" for i in range(len(texts))]
+
+        scene_collection.add(
+            embeddings=embeddings,
+            documents=texts,
+            metadatas=metadatas,
+            ids=ids
+        )
+
+        full_text = " ".join(texts)
+        st.session_state.full_texts[filename] = full_text
+
+        # Generate and store video-level metadata
+        with st.spinner("🧠 Generating AI video metadata..."):
+            video_meta = generate_video_metadata(full_text, filename, domain_hint, video_url)
+            video_meta_id = f"video_{filename}_{uuid.uuid4()}"
+            video_meta_collection.upsert(
+                ids=[video_meta_id],
+                metadatas=[video_meta],
+                documents=[full_text[:1000]]
+            )
+            # Also update session cache (decode JSON for internal use)
+            decoded_meta = {}
+            for key, value in video_meta.items():
+                if isinstance(value, str) and value.startswith(('{', '[')):
+                    try:
+                        decoded_meta[key] = json.loads(value)
+                    except:
+                        decoded_meta[key] = value
+                else:
+                    decoded_meta[key] = value
+            st.session_state.enriched_metadata[filename] = decoded_meta
+
+        build_bm25_index()
+        return len(valid_chunks), None
     else:
         return None, "Invalid source type"
-
-    if not chunks:
-        return 0, "No valid subtitle content found."
-
-    texts = [c["text"] for c in chunks]
-    metadatas = []
-    for c in chunks:
-        mins = int(c["start"] // 60)
-        secs = int(c["start"] % 60)
-        metadatas.append({
-            "filename": filename,
-            "file_hash": file_hash,
-            "start": c["start"],
-            "end": c["end"],
-            "duration": round(c["end"] - c["start"], 1),
-            "timecode": f"{mins}:{secs:02d}",
-            "subtitle_count": c.get("subtitle_count", 0),
-            "domain_hint": domain_hint,
-            "speaker": "unknown"
-        })
-
-    embeddings = get_embeddings_batch(texts)
-    if len(embeddings) != len(texts):
-        return None, f"Embedding mismatch: {len(embeddings)} vs {len(texts)}"
-
-    # Per-chunk keyword tags (KeyBERT)
-    tags_list = []
-    for text in texts:
-        keywords = kw_model.extract_keywords(
-            text,
-            keyphrase_ngram_range=(1, 2),
-            stop_words='english',
-            top_n=3
-        )
-        tag_string = ", ".join([kw[0] for kw in keywords]) if keywords else "general"
-        tags_list.append(tag_string)
-    for i, tags in enumerate(tags_list):
-        metadatas[i]["tags"] = tags
-
-    ids = [f"{filename}_{i}_{uuid.uuid4()}" for i in range(len(texts))]
-
-    scene_collection.add(
-        embeddings=embeddings,
-        documents=texts,
-        metadatas=metadatas,
-        ids=ids
-    )
-
-    full_text = " ".join(texts)
-    st.session_state.full_texts[filename] = full_text
-
-    # Generate and store video-level metadata
-    with st.spinner("🧠 Generating AI video metadata..."):
-        video_meta = generate_video_metadata(full_text, filename, domain_hint, video_url)
-        # Store in video metadata collection
-        video_meta_id = f"video_{filename}_{uuid.uuid4()}"
-        video_meta_collection.upsert(
-            ids=[video_meta_id],
-            metadatas=[video_meta],
-            documents=[full_text[:1000]]
-        )
-        # Also update session cache (decode JSON for internal use)
-        decoded_meta = {}
-        for key, value in video_meta.items():
-            if isinstance(value, str) and value.startswith(('{', '[')):
-                try:
-                    decoded_meta[key] = json.loads(value)
-                except:
-                    decoded_meta[key] = value
-            else:
-                decoded_meta[key] = value
-        st.session_state.enriched_metadata[filename] = decoded_meta
-
-    # Rebuild BM25 index
-    build_bm25_index()
-    return len(valid_chunks), None
 
 def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint: str = "general") -> Tuple[Optional[int], Optional[str]]:
     """Process uploaded file (SRT/VTT)."""
@@ -975,17 +956,15 @@ def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint
     full_text = " ".join(texts)
     st.session_state.full_texts[filename] = full_text
 
-    # Generate and store video-level metadata (no video URL)
+    # Generate and store video-level metadata
     with st.spinner("🧠 Generating AI video metadata..."):
         video_meta = generate_video_metadata(full_text, filename, domain_hint)
-        # Store in video metadata collection
         video_meta_id = f"video_{filename}_{uuid.uuid4()}"
         video_meta_collection.upsert(
             ids=[video_meta_id],
             metadatas=[video_meta],
             documents=[full_text[:1000]]
         )
-        # Also update session cache (decode JSON for internal use)
         decoded_meta = {}
         for key, value in video_meta.items():
             if isinstance(value, str) and value.startswith(('{', '[')):
@@ -998,7 +977,6 @@ def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint
         st.session_state.enriched_metadata[filename] = decoded_meta
 
     os.unlink(tmp_path)
-    # Rebuild BM25 index
     build_bm25_index()
     return len(valid_chunks), None
 
@@ -1006,7 +984,6 @@ def delete_file(filename: str):
     if not COLLECTION_VALID:
         return
     scene_collection.delete(where={"filename": filename})
-    # Delete from video metadata collection
     existing_video = video_meta_collection.get(where={"filename": filename})
     if existing_video['ids']:
         video_meta_collection.delete(ids=existing_video['ids'])
@@ -1046,10 +1023,8 @@ def render_editable_tags(video_filename: str, current_tags: List[str], key_prefi
                 if st.button("➕ Add", key=f"add_{video_filename}_{key_prefix}"):
                     if new_tag and new_tag not in tags:
                         tags.append(new_tag)
-                        # Update in DB and session
                         video_meta = st.session_state.enriched_metadata.get(video_filename, {})
                         video_meta["user_tags"] = tags
-                        # Encode user_tags as JSON for ChromaDB
                         encoded_meta = {
                             "user_tags": json.dumps(tags)
                         }
@@ -1111,7 +1086,6 @@ with st.sidebar:
         help="Improves AI metadata"
     )
 
-    # File upload section
     st.write("**Upload SRT/VTT files**")
     uploaded_files = st.file_uploader(
         "SRT/VTT",
@@ -1129,7 +1103,6 @@ with st.sidebar:
                 else:
                     st.success(f"✅ {cnt} scenes")
 
-    # YouTube section
     st.write("**Or ingest from YouTube**")
     youtube_url = st.text_input("YouTube URL", placeholder="https://youtu.be/...", key="youtube_url")
     if st.button("📥 Fetch YouTube Subtitles", use_container_width=True):
@@ -1178,9 +1151,7 @@ with st.sidebar:
 
     with st.expander("⚙️ System", expanded=False):
         if st.button("🔄 Reset DB"):
-            # Clear all cached resources (models and ChromaDB connections)
             st.cache_resource.clear()
-            # Delete the physical database files
             persist_dir = os.path.join(os.path.dirname(__file__), "chroma_db")
             client = chromadb.PersistentClient(path=persist_dir)
             try:
@@ -1188,7 +1159,6 @@ with st.sidebar:
                 client.delete_collection("video_metadata")
             except:
                 pass
-            # Reset session state
             st.session_state.collection = None
             st.session_state.video_meta_collection = None
             st.session_state.enriched_metadata = {}
@@ -1288,7 +1258,6 @@ if query and COLLECTION_VALID:
                 del st.session_state.result_cache[oldest]
 
     if results:
-        # Export all
         if len(results) > 0:
             export_df = pd.DataFrame([
                 {
@@ -1307,7 +1276,6 @@ if query and COLLECTION_VALID:
                 mime="text/csv"
             )
 
-        # Paginate results
         if 'result_offset' not in st.session_state:
             st.session_state.result_offset = 0
         start = st.session_state.result_offset
@@ -1328,26 +1296,22 @@ if query and COLLECTION_VALID:
                     st.markdown(f"<span class='confidence-badge'>{norm_score*100:.0f}%</span>", unsafe_allow_html=True)
                 st.progress(norm_score)
 
-                # Scene-level tags
                 if meta.get("tags") and meta["tags"] != "general":
                     scene_tags = [t.strip() for t in meta["tags"].split(", ") if t.strip() and t != "general"][:6]
                     scene_tag_html = " ".join([f'<span class="tag-pill">{tag}</span>' for tag in scene_tags])
                     st.markdown(f"🎬 Scene tags: {scene_tag_html}", unsafe_allow_html=True)
 
-                # Video-level metadata
                 video_meta = st.session_state.enriched_metadata.get(meta['filename'], {})
                 video_keywords = video_meta.get('keywords', [])
                 if video_keywords:
                     kw_html = " ".join([f'<span class="tag-pill">{kw}</span>' for kw in video_keywords[:6]])
                     st.markdown(f"📌 Video keywords: {kw_html}", unsafe_allow_html=True)
 
-                # IAB categories
                 iab_cats = video_meta.get('iab_categories', [])
                 if iab_cats:
                     iab_html = " ".join([f'<span class="iab-badge">{cat}</span>' for cat in iab_cats[:3]])
                     st.markdown(f"📺 {iab_html}", unsafe_allow_html=True)
 
-                # Sentiment & Tone
                 sentiment = video_meta.get('sentiment')
                 tone = video_meta.get('tone')
                 if sentiment or tone:
@@ -1358,7 +1322,6 @@ if query and COLLECTION_VALID:
                         sentiment_html += f'<span class="sentiment-tag">Tone: {tone}</span>'
                     st.markdown(f"🎭 {sentiment_html}", unsafe_allow_html=True)
 
-                # Editable user tags
                 user_tags = video_meta.get('user_tags', [])
                 render_editable_tags(meta['filename'], user_tags, f"scene_{i}")
 
@@ -1368,22 +1331,17 @@ if query and COLLECTION_VALID:
                 col_b1, col_b2 = st.columns(2)
                 with col_b1:
                     if st.button("▶️ Jump to", key=f"jump_{i}", use_container_width=True):
-                        # If video has YouTube URL, open with timestamp
                         video_url = video_meta.get('video_url', '')
                         if video_url and 'youtu' in video_url:
-                            # Build timestamp URL
-                            t = int(meta['start'])  # ±3 seconds? We'll use exact start
-                            # Ensure it's within bounds
-                            # Create URL with timestamp
+                            t = int(meta['start'])
                             if 'watch?v=' in video_url:
-                                base = video_url.split('&')[0]  # remove any existing query
+                                base = video_url.split('&')[0]
                                 jump_url = f"{base}&t={t}s"
                             elif 'youtu.be/' in video_url:
                                 base = video_url.split('?')[0]
                                 jump_url = f"{base}?t={t}s"
                             else:
                                 jump_url = video_url
-                            # Open in new tab
                             st.markdown(f'<meta http-equiv="refresh" content="0; url={jump_url}">', unsafe_allow_html=True)
                         else:
                             st.session_state.selected_result = r
@@ -1398,7 +1356,6 @@ if query and COLLECTION_VALID:
                     )
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # Load more
         if end < len(results):
             if st.button("⬇️ Load more", use_container_width=True):
                 st.session_state.result_offset = end
@@ -1427,9 +1384,7 @@ if st.session_state.selected_result:
     col_vid, col_info = st.columns([2, 1])
     with col_vid:
         if video_url and 'youtu' in video_url:
-            # Embed YouTube player with start time
             t = int(meta_sel['start'])
-            # Convert to embed URL
             if 'watch?v=' in video_url:
                 video_id = video_url.split('v=')[1].split('&')[0]
                 embed_url = f"https://www.youtube.com/embed/{video_id}?start={t}"
