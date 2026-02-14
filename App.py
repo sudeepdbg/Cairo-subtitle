@@ -19,6 +19,7 @@ import json
 import time
 from datetime import datetime
 import re
+import requests
 
 # ------------------------------------------------------------------
 # PAGE CONFIG (MUST BE FIRST)
@@ -61,13 +62,13 @@ for key, val in _DEFAULT_STATE.items():
 # SECRETS
 # ------------------------------------------------------------------
 MISTRAL_API_KEY = st.secrets.get("MISTRAL_API_KEY")
+HF_TOKEN = st.secrets.get("HF_TOKEN")  # Hugging Face token for Gemma 2
 
 # ------------------------------------------------------------------
 # IAB TAXONOMY LOADER (simplified mapping)
 # ------------------------------------------------------------------
 def load_iab_taxonomy() -> Dict[str, List[str]]:
-    """Return a simple mapping from keywords to IAB categories.
-       In production, use a proper taxonomy service or fine‑tuned classifier."""
+    """Return a simple mapping from keywords to IAB categories."""
     return {
         "sports": ["IAB17", "IAB17-6", "IAB17-8"],
         "football": ["IAB17-6"],
@@ -198,6 +199,15 @@ def get_theme_css(theme: str) -> str:
         .stProgress > div > div {{
             background-color: {accent};
             border-radius: 10px;
+        }}
+        .sentiment-tag {{
+            background-color: {accent}30;
+            color: {accent};
+            padding: 0.2rem 0.6rem;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            margin-right: 0.3rem;
+            display: inline-block;
         }}
     </style>
     """
@@ -484,11 +494,18 @@ def search_subtitles(
         return []
 
 # ------------------------------------------------------------------
-# ENHANCED METADATA GENERATION (Mistral + KeyBERT + IAB)
+# ENHANCED METADATA GENERATION (Gemma 2 / Mistral + KeyBERT + IAB)
 # ------------------------------------------------------------------
 def _parse_llm_output(text: str) -> Dict:
-    """Parse the structured LLM output."""
-    result = {"summary": "", "themes": [], "entities": [], "iab_categories": []}
+    """Parse the structured LLM output (now includes sentiment and tone)."""
+    result = {
+        "summary": "",
+        "themes": [],
+        "entities": [],
+        "iab_categories": [],
+        "sentiment": "",
+        "tone": ""
+    }
     lines = [l.strip() for l in text.split("\n") if l.strip()]
     for line in lines:
         if line.lower().startswith("summary:"):
@@ -499,15 +516,44 @@ def _parse_llm_output(text: str) -> Dict:
             result["entities"] = [e.strip() for e in line.split(":", 1)[1].split(",") if e.strip()]
         elif line.lower().startswith("iab:"):
             result["iab_categories"] = [c.strip() for c in line.split(":", 1)[1].split(",") if c.strip()]
+        elif line.lower().startswith("sentiment:"):
+            result["sentiment"] = line.split(":", 1)[1].strip()
+        elif line.lower().startswith("tone:"):
+            result["tone"] = line.split(":", 1)[1].strip()
     return result
 
+def call_gemma_llm(prompt: str) -> Optional[str]:
+    """Call Gemma 2 via Hugging Face Inference API."""
+    if not HF_TOKEN:
+        return None
+    API_URL = "https://api-inference.huggingface.co/models/google/gemma-2-2b-it"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    payload = {
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": 400,
+            "temperature": 0.2,
+            "return_full_text": False
+        }
+    }
+    try:
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        if response.status_code == 200:
+            output = response.json()
+            if isinstance(output, list) and len(output) > 0:
+                return output[0].get("generated_text", "")
+            return output.get("generated_text", "")
+        else:
+            st.warning(f"Gemma API error {response.status_code}")
+    except Exception as e:
+        st.warning(f"Gemma call failed: {e}")
+    return None
+
 def enrich_with_llm(full_text: str, domain_hint: str) -> Dict:
-    """Use Mistral to generate rich metadata."""
-    if not MISTRAL_API_KEY:
-        return {}
+    """Use either Gemma 2 (if HF token) or Mistral (if Mistral key) to generate rich metadata."""
     full_text = full_text[:8000]  # token limit approx
 
-    prompt = f"""You are an expert content analyst specializing in {domain_hint}. Analyze this video transcript and extract structured metadata.
+    prompt = f"""You are an expert content analyst specializing in {domain_hint}. Analyze this video transcript and extract structured metadata including sentiment and tone.
 
 Transcript:
 {full_text}
@@ -517,25 +563,36 @@ Summary: <one concise sentence summarizing the video>
 Themes: <theme1>, <theme2>, <theme3>, <theme4>, <theme5> (up to 10)
 Entities: <person1>, <person2>, <organization1>, <location1>, <event1> (list important named entities)
 IAB: <iab1>, <iab2> (list relevant IAB content categories, e.g., IAB17-6 for sports/football)
+Sentiment: <positive/negative/neutral>
+Tone: <one or two words describing the overall tone, e.g., excited, serious, humorous, dramatic>
 
 Rules:
 - Be specific, avoid generic terms
 - Use IAB categories if applicable
-- Output only the four lines above
+- Output only the six lines above
 """
 
-    try:
-        client = Mistral(api_key=MISTRAL_API_KEY)
-        response = client.chat.complete(
-            model="mistral-large-latest",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=300
-        )
-        return _parse_llm_output(response.choices[0].message.content)
-    except Exception as e:
-        st.warning(f"⚠️ LLM enrichment failed: {str(e)[:100]}")
-        return {}
+    # Try Gemma 2 first if HF token exists
+    if HF_TOKEN:
+        response_text = call_gemma_llm(prompt)
+        if response_text:
+            return _parse_llm_output(response_text)
+
+    # Fallback to Mistral if available
+    if MISTRAL_API_KEY:
+        try:
+            client = Mistral(api_key=MISTRAL_API_KEY)
+            response = client.chat.complete(
+                model="mistral-large-latest",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=400
+            )
+            return _parse_llm_output(response.choices[0].message.content)
+        except Exception as e:
+            st.warning(f"⚠️ Mistral enrichment failed: {str(e)[:100]}")
+
+    return {}
 
 def generate_video_metadata(full_text: str, filename: str, domain_hint: str) -> Dict:
     """Generate video-level metadata by combining LLM and KeyBERT."""
@@ -568,12 +625,16 @@ def generate_video_metadata(full_text: str, filename: str, domain_hint: str) -> 
         "themes": llm_meta.get("themes", keyword_tags[:8]),
         "entities": llm_meta.get("entities", []),
         "iab_categories": list(iab_categories) if iab_categories else ["IAB1"],  # fallback to Entertainment
+        "sentiment": llm_meta.get("sentiment", "neutral"),
+        "tone": llm_meta.get("tone", "general"),
         "keywords": keyword_tags[:15],
         "confidence": {
             "summary": 0.9 if llm_meta.get("summary") else 0.6,
             "themes": 0.85 if llm_meta.get("themes") else 0.7,
             "entities": 0.8 if llm_meta.get("entities") else 0.6,
-            "iab": 0.7 if iab_categories else 0.5
+            "iab": 0.7 if iab_categories else 0.5,
+            "sentiment": 0.8 if llm_meta.get("sentiment") else 0.5,
+            "tone": 0.8 if llm_meta.get("tone") else 0.5,
         },
         "user_tags": [],
         "created_at": time.time()
@@ -1081,14 +1142,20 @@ if query and COLLECTION_VALID:
                     iab_html = " ".join([f'<span class="iab-badge">{cat}</span>' for cat in iab_cats[:3]])
                     st.markdown(f"📺 {iab_html}", unsafe_allow_html=True)
 
-                # 4. Editable user tags
+                # 4. Sentiment & Tone
+                sentiment = video_meta.get('sentiment')
+                tone = video_meta.get('tone')
+                if sentiment or tone:
+                    sentiment_html = ""
+                    if sentiment:
+                        sentiment_html += f'<span class="sentiment-tag">Sentiment: {sentiment}</span> '
+                    if tone:
+                        sentiment_html += f'<span class="sentiment-tag">Tone: {tone}</span>'
+                    st.markdown(f"🎭 {sentiment_html}", unsafe_allow_html=True)
+
+                # 5. Editable user tags
                 user_tags = video_meta.get('user_tags', [])
                 render_editable_tags(meta['filename'], user_tags, f"scene_{i}")
-
-                # (Optional) Debug expander – remove after verification
-                # with st.expander("🔍 Debug metadata"):
-                #     st.json(video_meta)
-                #     st.write("Scene metadata:", meta)
 
                 with st.expander("💬 Transcript"):
                     st.write(r['text'][:500] + ("…" if len(r['text']) > 500 else ""))
@@ -1146,6 +1213,8 @@ if st.session_state.selected_result:
             st.markdown(f"*Summary:* {video_meta.get('summary', 'N/A')}")
             st.markdown(f"*Themes:* {', '.join(video_meta.get('themes', [])[:5])}")
             st.markdown(f"*IAB:* {', '.join(video_meta.get('iab_categories', []))}")
+            st.markdown(f"*Sentiment:* {video_meta.get('sentiment', 'N/A')}")
+            st.markdown(f"*Tone:* {video_meta.get('tone', 'N/A')}")
         else:
             st.caption("No video metadata yet.")
         render_editable_tags(meta_sel['filename'], video_meta.get('user_tags', []), "detail")
