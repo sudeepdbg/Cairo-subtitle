@@ -20,6 +20,8 @@ import time
 from datetime import datetime
 import re
 import requests
+from youtube_transcript_api import YouTubeTranscriptApi
+from urllib.parse import urlparse, parse_qs
 
 # ------------------------------------------------------------------
 # PAGE CONFIG (MUST BE FIRST)
@@ -316,6 +318,48 @@ def get_embeddings_batch(texts: List[str], batch_size: int = 64) -> List[List[fl
         show_progress_bar=False,
         normalize_embeddings=True
     ).tolist()
+
+def extract_youtube_video_id(url: str) -> Optional[str]:
+    """Extract video ID from YouTube URL."""
+    parsed = urlparse(url)
+    if parsed.hostname in ('youtu.be', 'www.youtu.be'):
+        return parsed.path[1:]
+    if parsed.hostname in ('youtube.com', 'www.youtube.com', 'm.youtube.com'):
+        if parsed.path == '/watch':
+            return parse_qs(parsed.query).get('v', [None])[0]
+        elif parsed.path.startswith('/embed/'):
+            return parsed.path.split('/')[2]
+    return None
+
+def fetch_youtube_subtitles(video_id: str, languages=['en']) -> Optional[List[Dict]]:
+    """Fetch YouTube subtitles and return as list of dicts with start, text, duration."""
+    try:
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        # Try to find manual or auto-generated English transcript
+        transcript = None
+        try:
+            transcript = transcript_list.find_manually_created_transcript(languages)
+        except:
+            try:
+                transcript = transcript_list.find_generated_transcript(languages)
+            except:
+                pass
+        if not transcript:
+            return None
+        # Fetch actual transcript
+        transcript_data = transcript.fetch()
+        # Convert to our format (start, end, text)
+        subtitles = []
+        for entry in transcript_data:
+            subtitles.append({
+                "start": entry['start'],
+                "end": entry['start'] + entry['duration'],
+                "text": entry['text']
+            })
+        return subtitles
+    except Exception as e:
+        st.warning(f"Could not fetch YouTube subtitles: {e}")
+        return None
 
 # ------------------------------------------------------------------
 # BUILD BM25 INDEX (with error handling)
@@ -621,7 +665,7 @@ Rules:
 
     return {}
 
-def generate_video_metadata(full_text: str, filename: str, domain_hint: str) -> Dict:
+def generate_video_metadata(full_text: str, filename: str, domain_hint: str, video_url: Optional[str] = None) -> Dict:
     """Generate video-level metadata by combining LLM and KeyBERT.
        Returns a dictionary where all list/dict values are JSON-encoded strings
        for ChromaDB compatibility."""
@@ -666,7 +710,8 @@ def generate_video_metadata(full_text: str, filename: str, domain_hint: str) -> 
             "tone": 0.8 if llm_meta.get("tone") else 0.5,
         },
         "user_tags": [],
-        "created_at": time.time()
+        "created_at": time.time(),
+        "video_url": video_url or "",  # store YouTube URL if available
     }
 
     # Convert all list/dict values to JSON strings for ChromaDB storage
@@ -680,24 +725,13 @@ def generate_video_metadata(full_text: str, filename: str, domain_hint: str) -> 
     return encoded_meta
 
 # ------------------------------------------------------------------
-# PROCESS FILE (with video metadata storage)
+# PROCESS FILE (with video metadata storage) – now also handles YouTube
 # ------------------------------------------------------------------
-def sliding_window_chunks_srt(filepath: str, window: int, overlap: int) -> List[Dict]:
-    subs = pysrt.open(filepath)
-    if not subs:
-        return []
-    entries = []
-    for sub in subs:
-        text = sub.text.replace("\n", " ").strip()
-        if text:
-            entries.append({
-                "start": sub.start.ordinal / 1000.0,
-                "end": sub.end.ordinal / 1000.0,
-                "text": text
-            })
+def sliding_window_chunks_from_entries(entries: List[Dict], window: int, overlap: int) -> List[Dict]:
+    """Convert subtitle entries (with start, end, text) into sliding window chunks."""
     if not entries:
         return []
-
+    entries.sort(key=lambda x: x["start"])
     chunks = []
     n = len(entries)
     start_idx = 0
@@ -726,6 +760,19 @@ def sliding_window_chunks_srt(filepath: str, window: int, overlap: int) -> List[
             })
         current_start += overlap
     return chunks
+
+def sliding_window_chunks_srt(filepath: str, window: int, overlap: int) -> List[Dict]:
+    subs = pysrt.open(filepath)
+    entries = []
+    for sub in subs:
+        text = sub.text.replace("\n", " ").strip()
+        if text:
+            entries.append({
+                "start": sub.start.ordinal / 1000.0,
+                "end": sub.end.ordinal / 1000.0,
+                "text": text
+            })
+    return sliding_window_chunks_from_entries(entries, window, overlap)
 
 def sliding_window_chunks_vtt(filepath: str, window: int, overlap: int) -> List[Dict]:
     subs = webvtt.read(filepath)
@@ -738,36 +785,114 @@ def sliding_window_chunks_vtt(filepath: str, window: int, overlap: int) -> List[
                 "end": sub.end_in_seconds,
                 "text": text
             })
-    if not entries:
-        return []
-    chunks = []
-    n = len(entries)
-    start_idx = 0
-    current_start = entries[0]["start"]
-    last_end = entries[-1]["end"]
-    while current_start < last_end:
-        window_end = current_start + window
-        while start_idx < n and entries[start_idx]["start"] < current_start:
-            start_idx += 1
-        window_entries = []
-        idx = start_idx
-        while idx < n and entries[idx]["start"] < window_end:
-            window_entries.append(entries[idx])
-            idx += 1
-        if window_entries:
-            merged_text = " ".join([e["text"] for e in window_entries])
-            chunk_start = window_entries[0]["start"]
-            chunk_end = window_entries[-1]["end"]
-            chunks.append({
-                "text": merged_text,
-                "start": chunk_start,
-                "end": chunk_end,
-                "subtitle_count": len(window_entries)
-            })
-        current_start += overlap
-    return chunks
+    return sliding_window_chunks_from_entries(entries, window, overlap)
+
+def process_video_source(source_type: str, source_identifier: str, window: int, overlap: int, domain_hint: str, video_url: Optional[str] = None) -> Tuple[Optional[int], Optional[str]]:
+    """Common function to process a video from either file or YouTube URL."""
+    if not COLLECTION_VALID:
+        return None, "Database is invalid. Please reset."
+
+    # For YouTube, source_identifier is video_id, for file it's file content (handled separately)
+    if source_type == "youtube":
+        video_id = source_identifier
+        # Create a filename for display
+        filename = f"YouTube_{video_id}"
+        # Check if already indexed by hash (using video_id as hash)
+        file_hash = hashlib.md5(video_id.encode()).hexdigest()
+        existing = scene_collection.get(where={"file_hash": file_hash})
+        if existing['ids']:
+            st.info(f"✅ YouTube video {video_id} already indexed")
+            if filename not in st.session_state.full_texts:
+                all_texts = existing['documents']
+                st.session_state.full_texts[filename] = " ".join(all_texts)
+            return len(existing['ids']), None
+
+        # Fetch subtitles
+        entries = fetch_youtube_subtitles(video_id)
+        if not entries:
+            return None, "No subtitles found for this YouTube video."
+        chunks = sliding_window_chunks_from_entries(entries, window, overlap)
+    else:
+        return None, "Invalid source type"
+
+    if not chunks:
+        return 0, "No valid subtitle content found."
+
+    texts = [c["text"] for c in chunks]
+    metadatas = []
+    for c in chunks:
+        mins = int(c["start"] // 60)
+        secs = int(c["start"] % 60)
+        metadatas.append({
+            "filename": filename,
+            "file_hash": file_hash,
+            "start": c["start"],
+            "end": c["end"],
+            "duration": round(c["end"] - c["start"], 1),
+            "timecode": f"{mins}:{secs:02d}",
+            "subtitle_count": c.get("subtitle_count", 0),
+            "domain_hint": domain_hint,
+            "speaker": "unknown"
+        })
+
+    embeddings = get_embeddings_batch(texts)
+    if len(embeddings) != len(texts):
+        return None, f"Embedding mismatch: {len(embeddings)} vs {len(texts)}"
+
+    # Per-chunk keyword tags (KeyBERT)
+    tags_list = []
+    for text in texts:
+        keywords = kw_model.extract_keywords(
+            text,
+            keyphrase_ngram_range=(1, 2),
+            stop_words='english',
+            top_n=3
+        )
+        tag_string = ", ".join([kw[0] for kw in keywords]) if keywords else "general"
+        tags_list.append(tag_string)
+    for i, tags in enumerate(tags_list):
+        metadatas[i]["tags"] = tags
+
+    ids = [f"{filename}_{i}_{uuid.uuid4()}" for i in range(len(texts))]
+
+    scene_collection.add(
+        embeddings=embeddings,
+        documents=texts,
+        metadatas=metadatas,
+        ids=ids
+    )
+
+    full_text = " ".join(texts)
+    st.session_state.full_texts[filename] = full_text
+
+    # Generate and store video-level metadata
+    with st.spinner("🧠 Generating AI video metadata..."):
+        video_meta = generate_video_metadata(full_text, filename, domain_hint, video_url)
+        # Store in video metadata collection
+        video_meta_id = f"video_{filename}_{uuid.uuid4()}"
+        video_meta_collection.upsert(
+            ids=[video_meta_id],
+            metadatas=[video_meta],
+            documents=[full_text[:1000]]
+        )
+        # Also update session cache (decode JSON for internal use)
+        decoded_meta = {}
+        for key, value in video_meta.items():
+            if isinstance(value, str) and value.startswith(('{', '[')):
+                try:
+                    decoded_meta[key] = json.loads(value)
+                except:
+                    decoded_meta[key] = value
+            else:
+                decoded_meta[key] = value
+        st.session_state.enriched_metadata[filename] = decoded_meta
+
+    # Rebuild BM25 index
+    build_bm25_index()
+    return len(valid_chunks), None
 
 def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint: str = "general") -> Tuple[Optional[int], Optional[str]]:
+    """Process uploaded file (SRT/VTT)."""
     if not COLLECTION_VALID:
         return None, "Database is invalid. Please reset."
 
@@ -850,7 +975,7 @@ def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint
     full_text = " ".join(texts)
     st.session_state.full_texts[filename] = full_text
 
-    # Generate and store video-level metadata
+    # Generate and store video-level metadata (no video URL)
     with st.spinner("🧠 Generating AI video metadata..."):
         video_meta = generate_video_metadata(full_text, filename, domain_hint)
         # Store in video metadata collection
@@ -858,7 +983,7 @@ def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint
         video_meta_collection.upsert(
             ids=[video_meta_id],
             metadatas=[video_meta],
-            documents=[full_text[:1000]]  # store preview
+            documents=[full_text[:1000]]
         )
         # Also update session cache (decode JSON for internal use)
         decoded_meta = {}
@@ -978,18 +1103,22 @@ with st.sidebar:
         overlap = st.slider("Overlap (s)", 5, 30, 15, 5)
     st.divider()
 
-    st.subheader("📤 Upload")
+    st.subheader("📤 Upload Content")
     domain_hint = st.selectbox(
         "Domain",
         ["general", "sports", "news", "entertainment", "education", "technology"],
         index=0,
         help="Improves AI metadata"
     )
+
+    # File upload section
+    st.write("**Upload SRT/VTT files**")
     uploaded_files = st.file_uploader(
         "SRT/VTT",
         type=['srt', 'vtt'],
         accept_multiple_files=True,
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        key="file_uploader"
     )
     if uploaded_files and COLLECTION_VALID:
         for f in uploaded_files:
@@ -999,6 +1128,25 @@ with st.sidebar:
                     st.error(err)
                 else:
                     st.success(f"✅ {cnt} scenes")
+
+    # YouTube section
+    st.write("**Or ingest from YouTube**")
+    youtube_url = st.text_input("YouTube URL", placeholder="https://youtu.be/...", key="youtube_url")
+    if st.button("📥 Fetch YouTube Subtitles", use_container_width=True):
+        if youtube_url:
+            video_id = extract_youtube_video_id(youtube_url)
+            if video_id:
+                with st.status(f"Fetching subtitles for {video_id}...", expanded=False):
+                    cnt, err = process_video_source("youtube", video_id, window_size, overlap, domain_hint, youtube_url)
+                    if err:
+                        st.error(err)
+                    else:
+                        st.success(f"✅ {cnt} scenes indexed")
+            else:
+                st.error("Invalid YouTube URL")
+        else:
+            st.warning("Please enter a YouTube URL")
+
     st.divider()
 
     # Library stats
@@ -1180,26 +1328,26 @@ if query and COLLECTION_VALID:
                     st.markdown(f"<span class='confidence-badge'>{norm_score*100:.0f}%</span>", unsafe_allow_html=True)
                 st.progress(norm_score)
 
-                # 1. Scene-level tags (from chunk metadata)
+                # Scene-level tags
                 if meta.get("tags") and meta["tags"] != "general":
                     scene_tags = [t.strip() for t in meta["tags"].split(", ") if t.strip() and t != "general"][:6]
                     scene_tag_html = " ".join([f'<span class="tag-pill">{tag}</span>' for tag in scene_tags])
                     st.markdown(f"🎬 Scene tags: {scene_tag_html}", unsafe_allow_html=True)
 
-                # 2. Video-level metadata
+                # Video-level metadata
                 video_meta = st.session_state.enriched_metadata.get(meta['filename'], {})
                 video_keywords = video_meta.get('keywords', [])
                 if video_keywords:
                     kw_html = " ".join([f'<span class="tag-pill">{kw}</span>' for kw in video_keywords[:6]])
                     st.markdown(f"📌 Video keywords: {kw_html}", unsafe_allow_html=True)
 
-                # 3. IAB categories
+                # IAB categories
                 iab_cats = video_meta.get('iab_categories', [])
                 if iab_cats:
                     iab_html = " ".join([f'<span class="iab-badge">{cat}</span>' for cat in iab_cats[:3]])
                     st.markdown(f"📺 {iab_html}", unsafe_allow_html=True)
 
-                # 4. Sentiment & Tone
+                # Sentiment & Tone
                 sentiment = video_meta.get('sentiment')
                 tone = video_meta.get('tone')
                 if sentiment or tone:
@@ -1210,7 +1358,7 @@ if query and COLLECTION_VALID:
                         sentiment_html += f'<span class="sentiment-tag">Tone: {tone}</span>'
                     st.markdown(f"🎭 {sentiment_html}", unsafe_allow_html=True)
 
-                # 5. Editable user tags
+                # Editable user tags
                 user_tags = video_meta.get('user_tags', [])
                 render_editable_tags(meta['filename'], user_tags, f"scene_{i}")
 
@@ -1219,9 +1367,27 @@ if query and COLLECTION_VALID:
 
                 col_b1, col_b2 = st.columns(2)
                 with col_b1:
-                    if st.button("▶️ Select", key=f"sel_{i}", use_container_width=True):
-                        st.session_state.selected_result = r
-                        st.rerun()
+                    if st.button("▶️ Jump to", key=f"jump_{i}", use_container_width=True):
+                        # If video has YouTube URL, open with timestamp
+                        video_url = video_meta.get('video_url', '')
+                        if video_url and 'youtu' in video_url:
+                            # Build timestamp URL
+                            t = int(meta['start'])  # ±3 seconds? We'll use exact start
+                            # Ensure it's within bounds
+                            # Create URL with timestamp
+                            if 'watch?v=' in video_url:
+                                base = video_url.split('&')[0]  # remove any existing query
+                                jump_url = f"{base}&t={t}s"
+                            elif 'youtu.be/' in video_url:
+                                base = video_url.split('?')[0]
+                                jump_url = f"{base}?t={t}s"
+                            else:
+                                jump_url = video_url
+                            # Open in new tab
+                            st.markdown(f'<meta http-equiv="refresh" content="0; url={jump_url}">', unsafe_allow_html=True)
+                        else:
+                            st.session_state.selected_result = r
+                            st.rerun()
                 with col_b2:
                     st.download_button(
                         "📄 JSON",
@@ -1245,27 +1411,55 @@ if query and COLLECTION_VALID:
         st.warning("No results. Try a different query or adjust filters.")
 
 elif COLLECTION_VALID and total_chunks == 0:
-    st.info("👋 Upload subtitle files to start searching.")
+    st.info("👋 Upload subtitle files or a YouTube URL to start searching.")
 else:
     st.info("✨ Enter a query above to search your library.")
 
-# Selected moment detail
+# Selected moment detail (for non-YouTube videos, or if Jump to didn't redirect)
 if st.session_state.selected_result:
     st.divider()
     st.subheader("🎬 Selected Moment")
     sel = st.session_state.selected_result
     meta_sel = sel['metadata']
+    video_meta = st.session_state.enriched_metadata.get(meta_sel['filename'], {})
+    video_url = video_meta.get('video_url', '')
 
     col_vid, col_info = st.columns([2, 1])
     with col_vid:
-        st.markdown('<div class="video-preview-placeholder">🎬 Video Preview</div>', unsafe_allow_html=True)
+        if video_url and 'youtu' in video_url:
+            # Embed YouTube player with start time
+            t = int(meta_sel['start'])
+            # Convert to embed URL
+            if 'watch?v=' in video_url:
+                video_id = video_url.split('v=')[1].split('&')[0]
+                embed_url = f"https://www.youtube.com/embed/{video_id}?start={t}"
+            elif 'youtu.be/' in video_url:
+                video_id = video_url.split('/')[-1].split('?')[0]
+                embed_url = f"https://www.youtube.com/embed/{video_id}?start={t}"
+            else:
+                embed_url = None
+            if embed_url:
+                st.video(embed_url)
+            else:
+                st.markdown('<div class="video-preview-placeholder">🎬 YouTube video (embed failed)</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="video-preview-placeholder">🎬 Video Preview (integration point)</div>', unsafe_allow_html=True)
         st.caption(f"⏱️ {meta_sel['timecode']} in {meta_sel['filename']}")
-        st.button("⏯️ Play (simulated)", use_container_width=True)
+        if video_url:
+            t = int(meta_sel['start'])
+            if 'watch?v=' in video_url:
+                base = video_url.split('&')[0]
+                jump_url = f"{base}&t={t}s"
+            elif 'youtu.be/' in video_url:
+                base = video_url.split('?')[0]
+                jump_url = f"{base}?t={t}s"
+            else:
+                jump_url = video_url
+            st.link_button("▶️ Open in YouTube", jump_url, use_container_width=True)
     with col_info:
         st.markdown("**📝 Context**")
         st.write(sel['text'][:200] + "…")
         st.markdown("**🏷️ Video Metadata**")
-        video_meta = st.session_state.enriched_metadata.get(meta_sel['filename'], {})
         if video_meta:
             st.markdown(f"*Summary:* {video_meta.get('summary', 'N/A')}")
             st.markdown(f"*Themes:* {', '.join(video_meta.get('themes', [])[:5])}")
