@@ -57,6 +57,7 @@ _DEFAULT_STATE = {
     "iab_taxonomy": None,
     # YouTube fallback state
     "last_youtube_url": "",
+    "current_youtube_id": None,
     "youtube_status": {},             # dict mapping video_id -> status: 'indexed', 'not_found', 'error'
 }
 for key, val in _DEFAULT_STATE.items():
@@ -347,7 +348,6 @@ def fetch_youtube_subtitles(video_id: str, languages=['en']) -> Optional[List[Di
             })
         return subtitles
     except Exception as e:
-        # Fallback to older method if needed (but we keep it simple)
         st.warning(f"Could not fetch YouTube subtitles: {e}")
         return None
 
@@ -1386,21 +1386,20 @@ if query and COLLECTION_VALID:
 
                 col_b1, col_b2 = st.columns(2)
                 with col_b1:
-                    if st.button("▶️ Jump to", key=f"jump_{i}", use_container_width=True):
-                        video_url = video_meta.get('video_url', '')
-                        if video_url and 'youtu' in video_url:
-                            t = int(meta['start'])
-                            if 'watch?v=' in video_url:
-                                base = video_url.split('&')[0]
-                                jump_url = f"{base}&t={t}s"
-                            elif 'youtu.be/' in video_url:
-                                base = video_url.split('?')[0]
-                                jump_url = f"{base}?t={t}s"
-                            else:
-                                jump_url = video_url
-                            # Open in new tab
-                            st.markdown(f'<meta http-equiv="refresh" content="0; url={jump_url}">', unsafe_allow_html=True)
+                    video_url = video_meta.get('video_url', '')
+                    if video_url and 'youtu' in video_url:
+                        t = int(meta['start'])
+                        if 'watch?v=' in video_url:
+                            base = video_url.split('&')[0]
+                            jump_url = f"{base}&t={t}s"
+                        elif 'youtu.be/' in video_url:
+                            base = video_url.split('?')[0]
+                            jump_url = f"{base}?t={t}s"
                         else:
+                            jump_url = video_url
+                        st.link_button("▶️ Jump to", jump_url, use_container_width=True)
+                    else:
+                        if st.button("▶️ Jump to", key=f"jump_{i}", use_container_width=True):
                             st.session_state.selected_result = r
                             st.rerun()
                 with col_b2:
