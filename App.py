@@ -11,7 +11,6 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from keybert import KeyBERT
 import chromadb
-from chromadb.config import Settings
 from mistralai import Mistral
 from rank_bm25 import BM25Okapi
 from typing import List, Dict, Tuple, Optional
@@ -71,7 +70,8 @@ for key, val in _DEFAULT_STATE.items():
 # SECRETS
 # ------------------------------------------------------------------
 MISTRAL_API_KEY = st.secrets.get("MISTRAL_API_KEY")
-HF_TOKEN = st.secrets.get("HF_TOKEN")  # Hugging Face token for Gemma 2
+if not MISTRAL_API_KEY:
+    st.warning("⚠️ MISTRAL_API_KEY not found. AI enrichment will be disabled.", icon="⚠️")
 
 # ------------------------------------------------------------------
 # IAB TAXONOMY LOADER (simplified mapping)
@@ -355,7 +355,7 @@ def fetch_youtube_subtitles(video_id: str, languages=['en']) -> Optional[List[Di
         return None
 
 # ------------------------------------------------------------------
-# BUILD BM25 INDEX (with error handling)
+# BM25 INDEX – Rebuilt after each addition
 # ------------------------------------------------------------------
 def build_bm25_index():
     """Build BM25 index from all documents in ChromaDB, if collection is valid."""
@@ -431,8 +431,8 @@ def rewrite_query_with_llm(query: str, domain: str) -> str:
         if rewritten and len(rewritten) > 3:
             st.session_state.query_cache[query] = rewritten
             return rewritten
-    except:
-        pass
+    except Exception as e:
+        st.warning(f"⚠️ Query rewrite failed: {str(e)[:100]}")
     return query
 
 # ------------------------------------------------------------------
@@ -558,7 +558,7 @@ def search_subtitles(
         return []
 
 # ------------------------------------------------------------------
-# ENHANCED METADATA GENERATION (Gemma 2 / Mistral + KeyBERT + IAB)
+# ENHANCED METADATA GENERATION (Mistral + KeyBERT + IAB)
 # ------------------------------------------------------------------
 def _parse_llm_output(text: str) -> Dict:
     """Parse the structured LLM output (now includes sentiment and tone)."""
@@ -586,35 +586,31 @@ def _parse_llm_output(text: str) -> Dict:
             result["tone"] = line.split(":", 1)[1].strip()
     return result
 
-def call_gemma_llm(prompt: str) -> Optional[str]:
-    """Call Gemma 2 via Hugging Face Inference API."""
-    if not HF_TOKEN:
+def call_mistral_llm(prompt: str, retries: int = 2) -> Optional[str]:
+    """Call Mistral API with retry logic."""
+    if not MISTRAL_API_KEY:
         return None
-    API_URL = "https://api-inference.huggingface.co/models/google/gemma-2-2b-it"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 400,
-            "temperature": 0.2,
-            "return_full_text": False
-        }
-    }
-    try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=30)
-        if response.status_code == 200:
-            output = response.json()
-            if isinstance(output, list) and len(output) > 0:
-                return output[0].get("generated_text", "")
-            return output.get("generated_text", "")
-        else:
-            st.warning(f"Gemma API error {response.status_code}")
-    except Exception as e:
-        st.warning(f"Gemma call failed: {e}")
+    for attempt in range(retries):
+        try:
+            client = Mistral(api_key=MISTRAL_API_KEY)
+            response = client.chat.complete(
+                model="mistral-large-latest",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=400
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            if attempt == retries - 1:
+                st.warning(f"⚠️ Mistral call failed: {str(e)[:100]}")
+            else:
+                time.sleep(1)
     return None
 
 def enrich_with_llm(full_text: str, domain_hint: str) -> Dict:
-    """Use either Gemma 2 (if HF token) or Mistral (if Mistral key) to generate rich metadata."""
+    """Use Mistral to generate rich metadata."""
+    if not MISTRAL_API_KEY:
+        return {}
     full_text = full_text[:8000]  # token limit approx
 
     prompt = f"""You are an expert content analyst specializing in {domain_hint}. Analyze this video transcript and extract structured metadata including sentiment and tone.
@@ -636,26 +632,9 @@ Rules:
 - Output only the six lines above
 """
 
-    # Try Gemma 2 first if HF token exists
-    if HF_TOKEN:
-        response_text = call_gemma_llm(prompt)
-        if response_text:
-            return _parse_llm_output(response_text)
-
-    # Fallback to Mistral if available
-    if MISTRAL_API_KEY:
-        try:
-            client = Mistral(api_key=MISTRAL_API_KEY)
-            response = client.chat.complete(
-                model="mistral-large-latest",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=400
-            )
-            return _parse_llm_output(response.choices[0].message.content)
-        except Exception as e:
-            st.warning(f"⚠️ Mistral enrichment failed: {str(e)[:100]}")
-
+    response_text = call_mistral_llm(prompt)
+    if response_text:
+        return _parse_llm_output(response_text)
     return {}
 
 def generate_video_metadata(full_text: str, filename: str, domain_hint: str, video_url: Optional[str] = None) -> Dict:
