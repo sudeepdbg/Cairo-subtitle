@@ -26,25 +26,50 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── CSS: only safe, structural overrides ──────────────────────────────────────
+# ── CSS ────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-/* Base */
-html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif !important;
+/* ── Force dark base everywhere ── */
+html, body { background-color: #0c0d10 !important; color: #d4d8e1 !important; }
+[class*="css"] { font-family: 'Inter', sans-serif !important; }
+
+/* Main app background */
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+    background-color: #0c0d10 !important;
+}
+
+/* Block container */
+[data-testid="block-container"] {
+    background-color: #0c0d10 !important;
+    padding: 1.75rem 2.25rem 3rem !important;
+    max-width: 1380px !important;
+}
+
+/* All text defaults */
+p, span, label, div, h1, h2, h3, h4, h5, h6 {
+    color: #d4d8e1 !important;
 }
 
 /* Hide default chrome */
 #MainMenu, footer, header { visibility: hidden; }
 [data-testid="stDecoration"] { display: none; }
 
-/* Sidebar */
-[data-testid="stSidebar"] > div:first-child {
-    background: #111318 !important;
+/* ── Sidebar ── */
+[data-testid="stSidebar"],
+[data-testid="stSidebar"] > div,
+[data-testid="stSidebar"] > div:first-child,
+section[data-testid="stSidebar"] {
+    background-color: #111318 !important;
     border-right: 1px solid #22252e !important;
 }
+[data-testid="stSidebar"] * { color: #d4d8e1 !important; }
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 { color: #f0f2f5 !important; }
+[data-testid="stSidebar"] .stCaption,
+[data-testid="stSidebar"] small { color: #6b7280 !important; }
 
 /* Sidebar nav buttons */
 [data-testid="stSidebar"] .stButton > button {
@@ -58,7 +83,6 @@ html, body, [class*="css"] {
     font-size: 0.875rem !important;
     font-weight: 500 !important;
     box-shadow: none !important;
-    transition: background 0.15s, color 0.15s !important;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
     background: #1e2029 !important;
@@ -67,11 +91,12 @@ html, body, [class*="css"] {
     box-shadow: none !important;
 }
 
-/* Active nav item via class injection */
+/* Active nav item */
 .nav-active button {
-    background: rgba(245,158,11,0.1) !important;
+    background: rgba(245,158,11,0.12) !important;
     color: #f59e0b !important;
     border-left: 2px solid #f59e0b !important;
+    padding-left: calc(0.75rem - 2px) !important;
 }
 
 /* Main buttons */
@@ -92,33 +117,36 @@ html, body, [class*="css"] {
     box-shadow: 0 4px 12px rgba(245,158,11,0.3) !important;
 }
 
-/* Inputs */
-input, textarea, [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea {
-    background: #16181d !important;
+/* ── Inputs ── */
+input, textarea,
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea,
+[data-baseweb="input"] input,
+[data-baseweb="textarea"] textarea {
+    background-color: #16181d !important;
     border: 1px solid #272a35 !important;
     border-radius: 7px !important;
     color: #d4d8e1 !important;
-    font-size: 0.9rem !important;
 }
 input:focus, textarea:focus {
     border-color: #f59e0b !important;
     box-shadow: 0 0 0 3px rgba(245,158,11,0.1) !important;
 }
+input::placeholder, textarea::placeholder { color: #4a5060 !important; }
 
-/* Selectbox */
-[data-testid="stSelectbox"] > div > div {
-    background: #16181d !important;
+/* ── Selectbox / Multiselect ── */
+[data-testid="stSelectbox"] > div > div,
+[data-testid="stMultiSelect"] > div > div,
+[data-baseweb="select"] > div {
+    background-color: #16181d !important;
     border: 1px solid #272a35 !important;
     border-radius: 7px !important;
     color: #d4d8e1 !important;
 }
-
-/* Multiselect */
-[data-testid="stMultiSelect"] > div > div {
-    background: #16181d !important;
-    border: 1px solid #272a35 !important;
-    border-radius: 7px !important;
-}
+[data-baseweb="popover"] { background-color: #1e2028 !important; }
+[data-baseweb="menu"] { background-color: #1e2028 !important; }
+[role="option"] { background-color: #1e2028 !important; color: #d4d8e1 !important; }
+[role="option"]:hover { background-color: #272a35 !important; }
 
 /* Tabs */
 [data-testid="stTabs"] [data-baseweb="tab-list"] {
@@ -171,11 +199,20 @@ input:focus, textarea:focus {
     overflow: hidden !important;
 }
 
-/* File uploader */
-[data-testid="stFileUploader"] {
-    background: #16181d !important;
+/* ── File uploader ── */
+[data-testid="stFileUploader"],
+[data-testid="stFileUploaderDropzone"] {
+    background-color: #16181d !important;
     border: 1.5px dashed #2a2d38 !important;
     border-radius: 8px !important;
+    color: #8b909e !important;
+}
+[data-testid="stFileUploader"] * { color: #8b909e !important; }
+[data-testid="stFileUploader"] button {
+    background-color: #272a35 !important;
+    color: #d4d8e1 !important;
+    border-radius: 6px !important;
+    border: 1px solid #363a47 !important;
 }
 
 /* Plotly charts */
