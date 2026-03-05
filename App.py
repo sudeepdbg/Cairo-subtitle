@@ -53,14 +53,21 @@ p, span, label, div, h1, h2, h3, h4, h5, h6 {
 }
 
 /* Hide default chrome */
-#MainMenu, footer, header { visibility: hidden; }
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
 [data-testid="stDecoration"] { display: none; }
+[data-testid="stHeader"] { background: transparent !important; }
+[data-testid="stToolbar"] { display: none; }
 
 /* ── Sidebar ── */
 [data-testid="stSidebar"],
 [data-testid="stSidebar"] > div,
 [data-testid="stSidebar"] > div:first-child,
 section[data-testid="stSidebar"] {
+    min-width: 240px !important;
+    max-width: 260px !important;
+    display: block !important;
+    visibility: visible !important;
     background-color: #111318 !important;
     border-right: 1px solid #22252e !important;
 }
