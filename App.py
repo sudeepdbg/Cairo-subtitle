@@ -1,1491 +1,1381 @@
-import streamlit as st
-import pysrt
-import webvtt
-import uuid
-import os
-import tempfile
-import hashlib
-import numpy as np
-import pandas as pd
-from sklearn.metrics.pairwise import cosine_similarity
-from sentence_transformers import SentenceTransformer, CrossEncoder
-from keybert import KeyBERT
-import chromadb
-from mistralai import Mistral
-from rank_bm25 import BM25Okapi
-from typing import List, Dict, Tuple, Optional
-import json
-import time
-from datetime import datetime
-import re
-import requests
-from youtube_transcript_api import YouTubeTranscriptApi
-from urllib.parse import urlparse, parse_qs
+"""
+Semantix — Enterprise Video Intelligence Platform
+app.py  — Main Streamlit application
 
-# ------------------------------------------------------------------
-# PAGE CONFIG (MUST BE FIRST)
-# ------------------------------------------------------------------
-st.set_page_config(
-    page_title="Project Cairo – Enterprise Semantic Search",
-    page_icon="🎥",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# ------------------------------------------------------------------
-# SESSION STATE INIT
-# ------------------------------------------------------------------
-_DEFAULT_STATE = {
-    "theme": "dark",
-    "last_query": "",
-    "selected_result": None,
-    "show_advanced": False,
-    "collection": None,               # scene‑level ChromaDB collection
-    "video_meta_collection": None,    # video‑level metadata collection
-    "enriched_metadata": {},          # cache for video metadata (loaded from DB)
-    "full_texts": {},
-    "processed_hashes": set(),
-    "search_history": [],
-    "query_cache": {},
-    "result_cache": {},
-    "filter_filename": None,
-    "result_offset": 0,
-    "bm25_index": None,
-    "bm25_docs": [],
-    "bm25_doc_ids": [],
-    "iab_taxonomy": None,
-    # YouTube fallback state
-    "last_youtube_url": "",
-    "current_youtube_id": None,
-    "youtube_status": {},             # dict mapping video_id -> status: 'indexed', 'not_found', 'error'
-    # Player state
-    "currently_playing": None,        # unique identifier for the currently playing video (e.g., filename_start)
-    "pending_switch": None,            # stores the result object to switch to after confirmation
-}
-for key, val in _DEFAULT_STATE.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
-
-# ------------------------------------------------------------------
-# SECRETS
-# ------------------------------------------------------------------
-MISTRAL_API_KEY = st.secrets.get("MISTRAL_API_KEY")
-if not MISTRAL_API_KEY:
-    st.warning("⚠️ MISTRAL_API_KEY not found. AI enrichment will be disabled.", icon="⚠️")
-
-# ------------------------------------------------------------------
-# IAB TAXONOMY LOADER (simplified mapping)
-# ------------------------------------------------------------------
-def load_iab_taxonomy() -> Dict[str, List[str]]:
-    """Return a simple mapping from keywords to IAB categories."""
-    return {
-        "sports": ["IAB17", "IAB17-6", "IAB17-8"],
-        "football": ["IAB17-6"],
-        "soccer": ["IAB17-6"],
-        "cricket": ["IAB17-8"],
-        "news": ["IAB12"],
-        "politics": ["IAB12-2"],
-        "technology": ["IAB19"],
-        "entertainment": ["IAB1"],
-        "movies": ["IAB1-2"],
-        "music": ["IAB1-5"],
-    }
-
-st.session_state.iab_taxonomy = load_iab_taxonomy()
-
-# ------------------------------------------------------------------
-# PROFESSIONAL THEME – Clean, modern, enterprise
-# ------------------------------------------------------------------
-def get_theme_css(theme: str) -> str:
-    if theme == "dark":
-        bg_main = "#0b0e14"
-        bg_sidebar = "#1a1e26"
-        text_primary = "#e2e8f0"
-        text_secondary = "#9aa4b5"
-        border_color = "#2d3748"
-        accent = "#4f7eb3"
-        card_bg = "#1f2630"
-        tag_bg = "#2d3748"
-    else:
-        bg_main = "#f8fafc"
-        bg_sidebar = "#ffffff"
-        text_primary = "#1e293b"
-        text_secondary = "#64748b"
-        border_color = "#e2e8f0"
-        accent = "#3b82f6"
-        card_bg = "#ffffff"
-        tag_bg = "#f1f5f9"
-
-    return f"""
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
-        * {{ font-family: 'Inter', sans-serif; }}
-        .stApp, .stApp header {{ background-color: {bg_main}; color: {text_primary}; }}
-        section[data-testid="stSidebar"] {{
-            background-color: {bg_sidebar};
-            border-right: 1px solid {border_color};
-        }}
-        .stTextInput input, .stNumberInput input, .stSelectbox, .stTextArea textarea {{
-            background-color: {bg_sidebar};
-            color: {text_primary};
-            border: 1px solid {border_color};
-            border-radius: 8px;
-        }}
-        .stButton button {{
-            background-color: {bg_sidebar};
-            color: {text_primary};
-            border: 1px solid {border_color};
-            border-radius: 8px;
-            transition: all 0.2s;
-        }}
-        .stButton button:hover {{
-            border-color: {accent};
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        }}
-        div[data-testid="stExpander"] {{
-            background-color: {bg_sidebar};
-            border: 1px solid {border_color};
-            border-radius: 12px;
-            padding: 0.5rem;
-        }}
-        .result-card {{
-            background-color: {card_bg};
-            border: 1px solid {border_color};
-            border-radius: 16px;
-            padding: 1.5rem;
-            margin-bottom: 1rem;
-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
-            transition: transform 0.2s, box-shadow 0.2s;
-        }}
-        .result-card:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
-        }}
-        .confidence-badge {{
-            background: {accent};
-            color: white;
-            padding: 0.25rem 0.75rem;
-            border-radius: 30px;
-            font-weight: 600;
-            font-size: 0.75rem;
-        }}
-        .tag-pill {{
-            background-color: {tag_bg};
-            color: {text_primary};
-            padding: 0.25rem 0.75rem;
-            border-radius: 30px;
-            font-size: 0.75rem;
-            margin-right: 0.5rem;
-            margin-bottom: 0.5rem;
-            display: inline-block;
-            border: 1px solid {border_color};
-            transition: background-color 0.2s;
-        }}
-        .tag-pill.editable:hover {{
-            background-color: {accent};
-            color: white;
-            cursor: pointer;
-        }}
-        .iab-badge {{
-            background-color: {accent}20;
-            color: {accent};
-            padding: 0.2rem 0.6rem;
-            border-radius: 4px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            margin-right: 0.3rem;
-        }}
-        .video-preview-placeholder {{
-            background: linear-gradient(145deg, {bg_sidebar}, {card_bg});
-            border: 1px solid {border_color};
-            border-radius: 12px;
-            height: 140px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: {text_secondary};
-        }}
-        .stProgress > div > div {{
-            background-color: {accent};
-            border-radius: 10px;
-        }}
-        .sentiment-tag {{
-            background-color: {accent}30;
-            color: {accent};
-            padding: 0.2rem 0.6rem;
-            border-radius: 12px;
-            font-size: 0.7rem;
-            margin-right: 0.3rem;
-            display: inline-block;
-        }}
-    </style>
-    """
-
-st.markdown(get_theme_css(st.session_state.theme), unsafe_allow_html=True)
-
-# ------------------------------------------------------------------
-# LOAD MODELS (cached)
-# ------------------------------------------------------------------
-@st.cache_resource
-def load_models():
-    bi_encoder = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
-    cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu')
-    kw_model = KeyBERT(model='all-MiniLM-L6-v2')
-    return bi_encoder, cross_encoder, kw_model
-
-bi_encoder, cross_encoder, kw_model = load_models()
-
-# ------------------------------------------------------------------
-# PERSISTENT CHROMADB – Scene collection and Video metadata collection
-# ------------------------------------------------------------------
-@st.cache_resource
-def init_chromadb():
-    persist_dir = os.path.join(os.path.dirname(__file__), "chroma_db")
-    os.makedirs(persist_dir, exist_ok=True)
-    client = chromadb.PersistentClient(path=persist_dir)
-
-    # Scene-level collection
-    scene_collection_name = "cairo_subtitles"
-    try:
-        scene_collection = client.get_collection(scene_collection_name)
-        if scene_collection.metadata and scene_collection.metadata.get("embedding_model") != "all-MiniLM-L6-v2":
-            st.warning("⚠️ Scene database created with different model. Reset DB in sidebar.")
-            scene_collection = None
-    except:
-        scene_collection = client.create_collection(
-            name=scene_collection_name,
-            metadata={
-                "hnsw:space": "ip",
-                "embedding_model": "all-MiniLM-L6-v2",
-                "dimension": 384,
-                "created_at": time.time()
-            }
-        )
-
-    # Video‑level metadata collection (stores one document per video)
-    video_meta_collection_name = "video_metadata"
-    try:
-        video_meta_collection = client.get_collection(video_meta_collection_name)
-    except:
-        video_meta_collection = client.create_collection(
-            name=video_meta_collection_name,
-            metadata={"description": "video‑level metadata"}
-        )
-
-    return scene_collection, video_meta_collection
-
-scene_collection, video_meta_collection = init_chromadb()
-st.session_state.collection = scene_collection
-st.session_state.video_meta_collection = video_meta_collection
-COLLECTION_VALID = scene_collection is not None
-
-# ------------------------------------------------------------------
-# LOAD VIDEO METADATA FROM DB INTO SESSION (with error handling)
-# ------------------------------------------------------------------
-def load_video_metadata_into_session():
-    """Safely load video metadata from ChromaDB into session state and parse JSON fields."""
-    if st.session_state.video_meta_collection is None:
-        return
-    try:
-        all_videos = st.session_state.video_meta_collection.get()
-        for i, vid_id in enumerate(all_videos['ids']):
-            meta = all_videos['metadatas'][i]
-            filename = meta.get('filename')
-            if filename:
-                # Parse JSON fields back to Python objects
-                parsed_meta = {}
-                for key, value in meta.items():
-                    if isinstance(value, str) and value.startswith(('{', '[')):
-                        try:
-                            parsed_meta[key] = json.loads(value)
-                        except:
-                            parsed_meta[key] = value
-                    else:
-                        parsed_meta[key] = value
-                st.session_state.enriched_metadata[filename] = parsed_meta
-    except Exception as e:
-        st.warning(f"⚠️ Could not load video metadata: {e}")
-        st.session_state.video_meta_collection = None
-
-load_video_metadata_into_session()
-
-# ------------------------------------------------------------------
-# HELPER FUNCTIONS
-# ------------------------------------------------------------------
-def get_file_hash(file_content: bytes) -> str:
-    return hashlib.md5(file_content).hexdigest()
-
-def get_embeddings_batch(texts: List[str], batch_size: int = 64) -> List[List[float]]:
-    if not texts:
-        return []
-    texts = [t if t.strip() else " " for t in texts]
-    return bi_encoder.encode(
-        texts,
-        batch_size=batch_size,
-        show_progress_bar=False,
-        normalize_embeddings=True
-    ).tolist()
-
-def extract_youtube_video_id(url: str) -> Optional[str]:
-    """Extract video ID from YouTube URL."""
-    parsed = urlparse(url)
-    if parsed.hostname in ('youtu.be', 'www.youtu.be'):
-        return parsed.path[1:]
-    if parsed.hostname in ('youtube.com', 'www.youtube.com', 'm.youtube.com'):
-        if parsed.path == '/watch':
-            return parse_qs(parsed.query).get('v', [None])[0]
-        elif parsed.path.startswith('/embed/'):
-            return parsed.path.split('/')[2]
-    return None
-
-def fetch_youtube_subtitles(video_id: str, languages=['en']) -> Optional[List[Dict]]:
-    """Fetch YouTube subtitles and return as list of dicts with start, text, duration."""
-    try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
-        subtitles = []
-        for entry in transcript:
-            subtitles.append({
-                "start": entry['start'],
-                "end": entry['start'] + entry['duration'],
-                "text": entry['text']
-            })
-        return subtitles
-    except Exception as e:
-        st.warning(f"Could not fetch YouTube subtitles: {e}")
-        return None
-
-# ------------------------------------------------------------------
-# BM25 INDEX – Rebuilt after each addition
-# ------------------------------------------------------------------
-def build_bm25_index():
-    """Build BM25 index from all documents in ChromaDB, if collection is valid."""
-    if not COLLECTION_VALID or scene_collection is None:
-        st.session_state.bm25_index = None
-        st.session_state.bm25_docs = []
-        st.session_state.bm25_doc_ids = []
-        return
-    try:
-        all_items = scene_collection.get()
-        if not all_items['documents']:
-            st.session_state.bm25_index = None
-            st.session_state.bm25_docs = []
-            st.session_state.bm25_doc_ids = []
-            return
-        tokenized_docs = [re.findall(r'\w+', doc.lower()) for doc in all_items['documents']]
-        st.session_state.bm25_index = BM25Okapi(tokenized_docs)
-        st.session_state.bm25_docs = all_items['documents']
-        st.session_state.bm25_doc_ids = all_items['ids']
-    except Exception as e:
-        st.warning(f"⚠️ Could not build BM25 index: {e}")
-        st.session_state.bm25_index = None
-        st.session_state.bm25_docs = []
-        st.session_state.bm25_doc_ids = []
-
-# Build BM25 index on startup (safe call)
-build_bm25_index()
-
-# ------------------------------------------------------------------
-# DOMAIN DETECTION & QUERY REWRITING
-# ------------------------------------------------------------------
-def detect_domain(query: str) -> str:
-    query_lower = query.lower()
-    if any(word in query_lower for word in ["cricket", "test", "ashes", "bcci", "icc", "bowler", "wicket", "six", "four", "out"]):
-        return "cricket"
-    elif any(word in query_lower for word in ["football", "soccer", "goal", "fifa", "world cup", "penalty", "messi", "ronaldo"]):
-        return "football"
-    elif any(word in query_lower for word in ["basketball", "nba", "lebron", "curry"]):
-        return "basketball"
-    elif any(word in query_lower for word in ["tennis", "grand slam", "federer", "nadal", "djokovic"]):
-        return "tennis"
-    return "general"
-
-def rewrite_query_with_llm(query: str, domain: str) -> str:
-    if not MISTRAL_API_KEY:
-        return query
-    if query in st.session_state.query_cache:
-        return st.session_state.query_cache[query]
-
-    domain_prompts = {
-        "cricket": "This is a cricket search query. Expand player names (e.g., 'Kohli' → 'Virat Kohli'), clarify match context (e.g., 'Ind vs Aus' → 'India vs Australia Test match'), and add cricket-specific terms.",
-        "football": "This is a football/soccer search query. Expand player names, add team names, and use football terminology.",
-        "general": "Expand the query with common synonyms and entity disambiguation."
-    }
-    prompt = domain_prompts.get(domain, domain_prompts["general"])
-
-    prompt = f"""{prompt}
-    Rewrite this search query to be more specific and disambiguate entities.
-    Output ONLY the rewritten query, no extra text.
-
-    Original: {query}
-    Rewritten:"""
-
-    try:
-        client = Mistral(api_key=MISTRAL_API_KEY)
-        response = client.chat.complete(
-            model="mistral-large-latest",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=50
-        )
-        rewritten = response.choices[0].message.content.strip()
-        if rewritten and len(rewritten) > 3:
-            st.session_state.query_cache[query] = rewritten
-            return rewritten
-    except Exception as e:
-        st.warning(f"⚠️ Query rewrite failed: {str(e)[:100]}")
-    return query
-
-# ------------------------------------------------------------------
-# HYBRID SEARCH (Vector + BM25) with RRF
-# ------------------------------------------------------------------
-def hybrid_search(query_vec, query_text: str, n_candidates: int = 100) -> Dict:
-    # Vector search
-    vector_results = scene_collection.query(
-        query_embeddings=query_vec,
-        n_results=n_candidates * 2
-    )
-
-    # BM25 search
-    bm25_ids, bm25_docs, bm25_metadatas = [], [], []
-    if st.session_state.bm25_index and st.session_state.bm25_docs:
-        tokenized_query = re.findall(r'\w+', query_text.lower())
-        bm25_scores = st.session_state.bm25_index.get_scores(tokenized_query)
-        top_bm25_indices = np.argsort(bm25_scores)[::-1][:n_candidates]
-        bm25_ids = [st.session_state.bm25_doc_ids[i] for i in top_bm25_indices]
-        bm25_docs = [st.session_state.bm25_docs[i] for i in top_bm25_indices]
-        bm25_metadatas = [scene_collection.get(ids=[id])['metadatas'][0] for id in bm25_ids]
-
-    # Combine with RRF
-    all_ids = list(vector_results['ids'][0]) + bm25_ids
-    all_docs = list(vector_results['documents'][0]) + bm25_docs
-    all_metadatas = list(vector_results['metadatas'][0]) + bm25_metadatas
-
-    seen = set()
-    unique_ids, unique_docs, unique_metadatas = [], [], []
-    for i, id_ in enumerate(all_ids):
-        if id_ not in seen:
-            seen.add(id_)
-            unique_ids.append(id_)
-            unique_docs.append(all_docs[i])
-            unique_metadatas.append(all_metadatas[i])
-
-    rrf_scores = {}
-    for rank, id_ in enumerate(vector_results['ids'][0]):
-        rrf_scores[id_] = rrf_scores.get(id_, 0) + 1 / (60 + rank + 1)
-    for rank, id_ in enumerate(bm25_ids):
-        rrf_scores[id_] = rrf_scores.get(id_, 0) + 1 / (60 + rank + 1)
-
-    sorted_ids = sorted(unique_ids, key=lambda x: rrf_scores.get(x, 0), reverse=True)
-
-    result_dict = {
-        'ids': [sorted_ids[:n_candidates]],
-        'documents': [[unique_docs[unique_ids.index(id_)] for id_ in sorted_ids[:n_candidates]]],
-        'metadatas': [[unique_metadatas[unique_ids.index(id_)] for id_ in sorted_ids[:n_candidates]]],
-        'distances': []
-    }
-    return result_dict
-
-# ------------------------------------------------------------------
-# DIVERSITY + MIN SCORE
-# ------------------------------------------------------------------
-def diversify_results(results: List[Dict], lambda_param: float = 0.6, top_k: int = 5) -> List[Dict]:
-    if len(results) <= top_k:
-        return results
-    texts = [r["text"] for r in results]
-    embeddings = get_embeddings_batch(texts)
-    embeddings = np.array(embeddings)
-    scores = np.array([r["score"] for r in results])
-    scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-9)
-
-    selected_indices = []
-    remaining_indices = list(range(len(results)))
-    first_idx = np.argmax(scores)
-    selected_indices.append(first_idx)
-    remaining_indices.remove(first_idx)
-
-    for _ in range(min(top_k, len(results)) - 1):
-        if not remaining_indices:
-            break
-        mmr_scores = []
-        for idx in remaining_indices:
-            rel = scores[idx]
-            sim_max = max(cosine_similarity(embeddings[idx].reshape(1, -1), embeddings[sel].reshape(1, -1))[0][0]
-                          for sel in selected_indices)
-            mmr = lambda_param * rel - (1 - lambda_param) * sim_max
-            mmr_scores.append(mmr)
-        best_idx = remaining_indices[np.argmax(mmr_scores)]
-        selected_indices.append(best_idx)
-        remaining_indices.remove(best_idx)
-
-    return [results[i] for i in selected_indices]
-
-def search_subtitles(
-    query: str,
-    n_final: int = 5,
-    n_candidates: int = 100,
-    diversify: bool = True,
-    lambda_param: float = 0.6,
-    min_score: float = -10.0
-) -> List[Dict]:
-    if not COLLECTION_VALID:
-        return []
-    try:
-        query_vec = get_embeddings_batch([query])
-        results = hybrid_search(query_vec, query, n_candidates * 2)
-        if not results['ids'][0]:
-            return []
-        pairs = [[query, doc] for doc in results['documents'][0]]
-        cross_scores = cross_encoder.predict(pairs)
-        reranked = []
-        for i in range(len(results['ids'][0])):
-            score = float(cross_scores[i])
-            if score < min_score:
-                continue
-            reranked.append({
-                "score": score,
-                "text": results['documents'][0][i],
-                "metadata": results['metadatas'][0][i],
-                "id": results['ids'][0][i]
-            })
-        reranked.sort(key=lambda x: x["score"], reverse=True)
-        if diversify:
-            reranked = diversify_results(reranked, lambda_param=lambda_param, top_k=n_final)
-        else:
-            reranked = reranked[:n_final]
-        return reranked
-    except Exception as e:
-        st.error(f"❌ Search failed: {e}")
-        return []
-
-# ------------------------------------------------------------------
-# ENHANCED METADATA GENERATION (Mistral + KeyBERT + IAB)
-# ------------------------------------------------------------------
-def _parse_llm_output(text: str) -> Dict:
-    """Parse the structured LLM output (now includes sentiment and tone)."""
-    result = {
-        "summary": "",
-        "themes": [],
-        "entities": [],
-        "iab_categories": [],
-        "sentiment": "",
-        "tone": ""
-    }
-    lines = [l.strip() for l in text.split("\n") if l.strip()]
-    for line in lines:
-        if line.lower().startswith("summary:"):
-            result["summary"] = line.split(":", 1)[1].strip()
-        elif line.lower().startswith("themes:"):
-            result["themes"] = [t.strip() for t in line.split(":", 1)[1].split(",") if t.strip()]
-        elif line.lower().startswith("entities:"):
-            result["entities"] = [e.strip() for e in line.split(":", 1)[1].split(",") if e.strip()]
-        elif line.lower().startswith("iab:"):
-            result["iab_categories"] = [c.strip() for c in line.split(":", 1)[1].split(",") if c.strip()]
-        elif line.lower().startswith("sentiment:"):
-            result["sentiment"] = line.split(":", 1)[1].strip()
-        elif line.lower().startswith("tone:"):
-            result["tone"] = line.split(":", 1)[1].strip()
-    return result
-
-def call_mistral_llm(prompt: str, retries: int = 2) -> Optional[str]:
-    """Call Mistral API with retry logic."""
-    if not MISTRAL_API_KEY:
-        return None
-    for attempt in range(retries):
-        try:
-            client = Mistral(api_key=MISTRAL_API_KEY)
-            response = client.chat.complete(
-                model="mistral-large-latest",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=400
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            if attempt == retries - 1:
-                st.warning(f"⚠️ Mistral call failed: {str(e)[:100]}")
-            else:
-                time.sleep(1)
-    return None
-
-def enrich_with_llm(full_text: str, domain_hint: str) -> Dict:
-    """Use Mistral to generate rich metadata."""
-    if not MISTRAL_API_KEY:
-        return {}
-    full_text = full_text[:8000]  # token limit approx
-
-    prompt = f"""You are an expert content analyst specializing in {domain_hint}. Analyze this video transcript and extract structured metadata including sentiment and tone.
-
-Transcript:
-{full_text}
-
-Output in EXACTLY this format (no extra text):
-Summary: <one concise sentence summarizing the video>
-Themes: <theme1>, <theme2>, <theme3>, <theme4>, <theme5> (up to 10)
-Entities: <person1>, <person2>, <organization1>, <location1>, <event1> (list important named entities)
-IAB: <iab1>, <iab2> (list relevant IAB content categories, e.g., IAB17-6 for sports/football)
-Sentiment: <positive/negative/neutral>
-Tone: <one or two words describing the overall tone, e.g., excited, serious, humorous, dramatic>
-
-Rules:
-- Be specific, avoid generic terms
-- Use IAB categories if applicable
-- Output only the six lines above
+Pages:
+  1. 🎬 Process Video     Upload SRT/VTT or YouTube URL
+  2. 🔍 Search            Hybrid semantic + BM25 search
+  3. 📺 Scene Explorer    Per-scene analysis browser
+  4. 📢 Ad Engine         Ad matching and placement planning
+  5. 📊 Analytics         Performance dashboard
+  6. 🎯 Franchise Intel   Cross-video theme tracking
 """
 
-    response_text = call_mistral_llm(prompt)
-    if response_text:
-        return _parse_llm_output(response_text)
-    return {}
+import io
+import json
+import re
+import time
+from typing import Optional
 
-def generate_video_metadata(full_text: str, filename: str, domain_hint: str, video_url: Optional[str] = None) -> Dict:
-    """Generate video-level metadata by combining LLM and KeyBERT.
-       Returns a dictionary where all list/dict values are JSON-encoded strings
-       for ChromaDB compatibility."""
-    # LLM enrichment
-    llm_meta = enrich_with_llm(full_text, domain_hint)
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
 
-    # KeyBERT keywords for fallback/extra tags
-    keywords = kw_model.extract_keywords(
-        full_text[:5000],
-        keyphrase_ngram_range=(1, 3),
-        stop_words='english',
-        top_n=20,
-        diversity=0.7
-    )
-    keyword_tags = [kw[0] for kw in keywords]
+# ── Core imports ──────────────────────────────────────────────────────────────
+from core.video_processor import VideoProcessor, VideoMetadata, fetch_youtube_transcript, fetch_youtube_metadata
+from core.scene_detector import Scene
+from core.ad_engine import AdMatchingEngine, create_default_inventory
+from core.search_engine import HybridSearchEngine
+from core.embeddings import _IAB_NAMES
 
-    # Map keywords to IAB categories (simple keyword matching)
-    iab_categories = set()
-    for kw in keyword_tags + llm_meta.get("themes", []):
-        kw_lower = kw.lower()
-        for key, cats in st.session_state.iab_taxonomy.items():
-            if key in kw_lower:
-                iab_categories.update(cats)
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE CONFIG
+# ══════════════════════════════════════════════════════════════════════════════
+st.set_page_config(
+    page_title="Semantix",
+    page_icon="🎬",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-    # Build the raw metadata (with lists/dicts)
-    raw_meta = {
-        "filename": filename,
-        "domain_hint": domain_hint,
-        "summary": llm_meta.get("summary", " ".join(keyword_tags[:3])),
-        "themes": llm_meta.get("themes", keyword_tags[:8]),
-        "entities": llm_meta.get("entities", []),
-        "iab_categories": list(iab_categories) if iab_categories else ["IAB1"],
-        "sentiment": llm_meta.get("sentiment", "neutral"),
-        "tone": llm_meta.get("tone", "general"),
-        "keywords": keyword_tags[:15],
-        "confidence": {
-            "summary": 0.9 if llm_meta.get("summary") else 0.6,
-            "themes": 0.85 if llm_meta.get("themes") else 0.7,
-            "entities": 0.8 if llm_meta.get("entities") else 0.6,
-            "iab": 0.7 if iab_categories else 0.5,
-            "sentiment": 0.8 if llm_meta.get("sentiment") else 0.5,
-            "tone": 0.8 if llm_meta.get("tone") else 0.5,
-        },
-        "user_tags": [],
-        "created_at": time.time(),
-        "video_url": video_url or "",  # store YouTube URL if available
+# ══════════════════════════════════════════════════════════════════════════════
+# DESIGN SYSTEM — Dark industrial UI with amber accent
+# ══════════════════════════════════════════════════════════════════════════════
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ── Base ── */
+html, body, [class*="css"] {
+    font-family: 'Syne', sans-serif !important;
+    background: #0A0A0F !important;
+    color: #E2E4EA !important;
+}
+
+/* ── Main container ── */
+[data-testid="stAppViewContainer"] > .main {
+    background: #0A0A0F;
+}
+[data-testid="block-container"] {
+    padding: 1.5rem 2rem !important;
+    max-width: 1400px !important;
+}
+
+/* ── Sidebar ── */
+[data-testid="stSidebar"] > div:first-child {
+    background: #0F0F18 !important;
+    border-right: 1px solid rgba(255,170,0,0.12) !important;
+}
+[data-testid="stSidebar"] .stMarkdown p,
+[data-testid="stSidebar"] .stMarkdown h1,
+[data-testid="stSidebar"] .stMarkdown h2,
+[data-testid="stSidebar"] .stMarkdown h3,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] .stSelectbox label {
+    color: #9AA0B0 !important;
+    font-size: 0.78rem !important;
+    letter-spacing: 0.5px;
+}
+[data-testid="stSidebar"] [data-testid="stSelectbox"] > div > div {
+    background: rgba(255,255,255,0.04) !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    border-radius: 8px !important;
+    color: #E2E4EA !important;
+    font-size: 0.85rem !important;
+}
+[data-testid="stSidebar"] hr { border-color: rgba(255,170,0,0.1) !important; }
+
+/* ── Metric cards ── */
+[data-testid="stMetric"] {
+    background: #13131F !important;
+    border: 1px solid rgba(255,170,0,0.15) !important;
+    border-radius: 12px !important;
+    padding: 16px 20px !important;
+}
+[data-testid="stMetricLabel"] {
+    color: #6B7280 !important;
+    font-size: 0.7rem !important;
+    letter-spacing: 1px !important;
+    text-transform: uppercase !important;
+}
+[data-testid="stMetricValue"] {
+    font-family: 'JetBrains Mono', monospace !important;
+    color: #FFAA00 !important;
+    font-size: 1.6rem !important;
+}
+[data-testid="stMetricDelta"] { font-size: 0.75rem !important; }
+
+/* ── Buttons ── */
+.stButton > button {
+    background: linear-gradient(135deg, #FFAA00, #FF7700) !important;
+    color: #0A0A0F !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-family: 'Syne', sans-serif !important;
+    font-weight: 700 !important;
+    font-size: 0.85rem !important;
+    letter-spacing: 0.5px !important;
+    padding: 8px 20px !important;
+    transition: all 0.2s !important;
+}
+.stButton > button:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 4px 20px rgba(255,170,0,0.35) !important;
+}
+
+/* ── Sidebar nav buttons ── */
+[data-testid="stSidebar"] .stButton > button {
+    background: transparent !important;
+    color: #9AA0B0 !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    border-radius: 8px !important;
+    text-align: left !important;
+    width: 100% !important;
+    font-weight: 600 !important;
+    font-size: 0.82rem !important;
+    padding: 9px 14px !important;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: rgba(255,170,0,0.08) !important;
+    border-color: rgba(255,170,0,0.3) !important;
+    color: #FFAA00 !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+/* ── Text inputs ── */
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea {
+    background: #13131F !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    border-radius: 8px !important;
+    color: #E2E4EA !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 0.85rem !important;
+}
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus {
+    border-color: #FFAA00 !important;
+    box-shadow: 0 0 0 2px rgba(255,170,0,0.15) !important;
+}
+
+/* ── File uploader ── */
+[data-testid="stFileUploader"] {
+    background: #13131F !important;
+    border: 2px dashed rgba(255,170,0,0.25) !important;
+    border-radius: 12px !important;
+}
+
+/* ── Expanders ── */
+[data-testid="stExpander"] {
+    background: #13131F !important;
+    border: 1px solid rgba(255,255,255,0.07) !important;
+    border-radius: 10px !important;
+}
+[data-testid="stExpander"] summary {
+    color: #E2E4EA !important;
+    font-weight: 600 !important;
+}
+
+/* ── DataFrames ── */
+[data-testid="stDataFrame"] {
+    border: 1px solid rgba(255,255,255,0.07) !important;
+    border-radius: 10px !important;
+    overflow: hidden !important;
+}
+
+/* ── Tabs ── */
+[data-testid="stTabs"] [data-baseweb="tab-list"] {
+    background: #13131F !important;
+    border-radius: 10px !important;
+    padding: 4px !important;
+    gap: 2px !important;
+}
+[data-testid="stTabs"] [data-baseweb="tab"] {
+    color: #6B7280 !important;
+    background: transparent !important;
+    border-radius: 7px !important;
+    font-family: 'Syne', sans-serif !important;
+    font-weight: 600 !important;
+    font-size: 0.82rem !important;
+    padding: 8px 18px !important;
+    border: none !important;
+}
+[data-testid="stTabs"] [aria-selected="true"] {
+    background: rgba(255,170,0,0.15) !important;
+    color: #FFAA00 !important;
+}
+
+/* ── Progress bar ── */
+[data-testid="stProgress"] > div > div {
+    background: linear-gradient(90deg, #FFAA00, #FF7700) !important;
+}
+
+/* ── Info / warning / error ── */
+[data-testid="stAlert"] {
+    border-radius: 10px !important;
+    border: none !important;
+}
+
+/* ── Plotly charts ── */
+[data-testid="stPlotlyChart"] {
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 12px;
+    overflow: hidden;
+    background: #13131F;
+}
+
+/* ── Custom components ── */
+.page-header {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 28px; padding-bottom: 18px;
+    border-bottom: 1px solid rgba(255,170,0,0.15);
+}
+.page-title {
+    font-size: 1.7rem; font-weight: 800; color: #FFFFFF;
+    letter-spacing: -0.5px; line-height: 1;
+}
+.page-subtitle { font-size: 0.82rem; color: #6B7280; margin-top: 4px; }
+.page-icon { font-size: 2rem; }
+
+.scene-card {
+    background: #13131F;
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+.scene-card:hover { border-color: rgba(255,170,0,0.35); }
+.scene-card.key { border-color: rgba(255,170,0,0.45); }
+
+.tag {
+    display: inline-block; padding: 2px 10px; border-radius: 20px;
+    font-size: 0.68rem; font-weight: 600; letter-spacing: 0.5px;
+    margin: 2px; text-transform: uppercase;
+}
+.tag-amber  { background: rgba(255,170,0,0.15); color: #FFAA00; }
+.tag-green  { background: rgba(54,211,153,0.15); color: #36D399; }
+.tag-red    { background: rgba(255,82,82,0.15);  color: #FF5252; }
+.tag-blue   { background: rgba(59,130,246,0.15); color: #60A5FA; }
+.tag-purple { background: rgba(167,139,250,0.15);color: #A78BFA; }
+
+.stat-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px; padding: 4px 12px;
+    font-size: 0.75rem; color: #9AA0B0;
+    margin: 2px;
+}
+.stat-pill strong { color: #E2E4EA; }
+
+.ad-card {
+    background: #16161F;
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 12px; padding: 16px;
+    margin-bottom: 8px;
+}
+.ad-score-bar {
+    height: 4px; border-radius: 2px;
+    background: linear-gradient(90deg, #FFAA00, #FF7700);
+    margin-top: 8px;
+}
+
+.search-result-card {
+    background: #13131F;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px; padding: 18px;
+    margin-bottom: 8px;
+    transition: border-color 0.15s;
+}
+.search-result-card:hover { border-color: rgba(255,170,0,0.3); }
+
+.logo-mark {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800; font-size: 1.15rem;
+    background: linear-gradient(135deg, #FFAA00, #FF7700);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    letter-spacing: -0.5px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SESSION STATE
+# ══════════════════════════════════════════════════════════════════════════════
+def _init():
+    defaults = {
+        "videos":        {},       # video_id → VideoMetadata
+        "search_engine": HybridSearchEngine(),
+        "ad_engine":     AdMatchingEngine(),
+        "page":          "process",
+        "selected_video": None,
+        "yt_api_key":    "",
     }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+_init()
 
-    # Convert all list/dict values to JSON strings for ChromaDB storage
-    encoded_meta = {}
-    for key, value in raw_meta.items():
-        if isinstance(value, (list, dict)):
-            encoded_meta[key] = json.dumps(value)
-        else:
-            encoded_meta[key] = value
 
-    return encoded_meta
+# ══════════════════════════════════════════════════════════════════════════════
+# PLOTLY THEME
+# ══════════════════════════════════════════════════════════════════════════════
+PLOTLY_THEME = dict(
+    plot_bgcolor  = "#13131F",
+    paper_bgcolor = "#13131F",
+    font          = dict(family="JetBrains Mono, monospace", color="#9AA0B0", size=11),
+    margin        = dict(l=16, r=16, t=40, b=16),
+    colorway      = ["#FFAA00", "#FF7700", "#36D399", "#60A5FA", "#A78BFA",
+                     "#FB923C", "#F472B6", "#34D399"],
+    xaxis         = dict(gridcolor="rgba(255,255,255,0.05)", linecolor="rgba(255,255,255,0.1)"),
+    yaxis         = dict(gridcolor="rgba(255,255,255,0.05)", linecolor="rgba(255,255,255,0.1)"),
+    hoverlabel    = dict(bgcolor="#1E1E2E", bordercolor="#FFAA00",
+                         font=dict(family="JetBrains Mono", size=11)),
+)
 
-# ------------------------------------------------------------------
-# PROCESS FILE (with video metadata storage) – now also handles YouTube
-# ------------------------------------------------------------------
-def sliding_window_chunks_from_entries(entries: List[Dict], window: int, overlap: int) -> List[Dict]:
-    """Convert subtitle entries (with start, end, text) into sliding window chunks."""
-    if not entries:
-        return []
-    entries.sort(key=lambda x: x["start"])
-    chunks = []
-    n = len(entries)
-    start_idx = 0
-    current_start = entries[0]["start"]
-    last_end = entries[-1]["end"]
 
-    while current_start < last_end:
-        window_end = current_start + window
-        while start_idx < n and entries[start_idx]["start"] < current_start:
-            start_idx += 1
-        window_entries = []
-        idx = start_idx
-        while idx < n and entries[idx]["start"] < window_end:
-            window_entries.append(entries[idx])
-            idx += 1
+# ══════════════════════════════════════════════════════════════════════════════
+# SIDEBAR
+# ══════════════════════════════════════════════════════════════════════════════
+NAV_PAGES = [
+    ("process",   "🎬", "Process Video"),
+    ("search",    "🔍", "Semantic Search"),
+    ("scenes",    "📺", "Scene Explorer"),
+    ("ads",       "📢", "Ad Engine"),
+    ("analytics", "📊", "Analytics"),
+    ("franchise", "🎯", "Franchise Intel"),
+]
 
-        if window_entries:
-            merged_text = " ".join([e["text"] for e in window_entries])
-            chunk_start = window_entries[0]["start"]
-            chunk_end = window_entries[-1]["end"]
-            chunks.append({
-                "text": merged_text,
-                "start": chunk_start,
-                "end": chunk_end,
-                "subtitle_count": len(window_entries)
-            })
-        current_start += overlap
-    return chunks
-
-def sliding_window_chunks_srt(filepath: str, window: int, overlap: int) -> List[Dict]:
-    subs = pysrt.open(filepath)
-    entries = []
-    for sub in subs:
-        text = sub.text.replace("\n", " ").strip()
-        if text:
-            entries.append({
-                "start": sub.start.ordinal / 1000.0,
-                "end": sub.end.ordinal / 1000.0,
-                "text": text
-            })
-    return sliding_window_chunks_from_entries(entries, window, overlap)
-
-def sliding_window_chunks_vtt(filepath: str, window: int, overlap: int) -> List[Dict]:
-    subs = webvtt.read(filepath)
-    entries = []
-    for sub in subs:
-        text = sub.text.replace("\n", " ").strip()
-        if text:
-            entries.append({
-                "start": sub.start_in_seconds,
-                "end": sub.end_in_seconds,
-                "text": text
-            })
-    return sliding_window_chunks_from_entries(entries, window, overlap)
-
-def process_video_source(source_type: str, source_identifier: str, window: int, overlap: int, domain_hint: str, video_url: Optional[str] = None, uploaded_file: Optional[bytes] = None) -> Tuple[Optional[int], Optional[str]]:
-    """Common function to process a video from either file or YouTube URL."""
-    if not COLLECTION_VALID:
-        return None, "Database is invalid. Please reset."
-
-    if source_type == "youtube":
-        video_id = source_identifier
-        filename = f"YouTube_{video_id}"
-        file_hash = hashlib.md5(video_id.encode()).hexdigest()
-        # Check if already indexed (using video_id as hash)
-        existing = scene_collection.get(where={"file_hash": file_hash})
-        if existing['ids']:
-            st.info(f"✅ YouTube video {video_id} already indexed")
-            if filename not in st.session_state.full_texts:
-                all_texts = existing['documents']
-                st.session_state.full_texts[filename] = " ".join(all_texts)
-            return len(existing['ids']), None
-
-        if uploaded_file is None:
-            # Fetch subtitles from YouTube
-            entries = fetch_youtube_subtitles(video_id)
-            if not entries:
-                return None, "No subtitles found for this YouTube video."
-            chunks = sliding_window_chunks_from_entries(entries, window, overlap)
-        else:
-            # Use uploaded SRT file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".srt") as tmp:
-                tmp.write(uploaded_file)
-                tmp_path = tmp.name
-            chunks = sliding_window_chunks_srt(tmp_path, window, overlap)
-            os.unlink(tmp_path)
-
-        valid_chunks = [c for c in chunks if c["text"].strip() and len(c["text"]) > 10]
-        if not valid_chunks:
-            return 0, "No valid subtitle content found."
-
-        texts = [c["text"] for c in valid_chunks]
-        metadatas = []
-        for c in valid_chunks:
-            mins = int(c["start"] // 60)
-            secs = int(c["start"] % 60)
-            metadatas.append({
-                "filename": filename,
-                "file_hash": file_hash,
-                "start": c["start"],
-                "end": c["end"],
-                "duration": round(c["end"] - c["start"], 1),
-                "timecode": f"{mins}:{secs:02d}",
-                "subtitle_count": c.get("subtitle_count", 0),
-                "domain_hint": domain_hint,
-                "speaker": "unknown"
-            })
-
-        embeddings = get_embeddings_batch(texts)
-        if len(embeddings) != len(texts):
-            return None, f"Embedding mismatch: {len(embeddings)} vs {len(texts)}"
-
-        # Per-chunk keyword tags (KeyBERT)
-        tags_list = []
-        for text in texts:
-            keywords = kw_model.extract_keywords(
-                text,
-                keyphrase_ngram_range=(1, 2),
-                stop_words='english',
-                top_n=3
-            )
-            tag_string = ", ".join([kw[0] for kw in keywords]) if keywords else "general"
-            tags_list.append(tag_string)
-        for i, tags in enumerate(tags_list):
-            metadatas[i]["tags"] = tags
-
-        ids = [f"{filename}_{i}_{uuid.uuid4()}" for i in range(len(texts))]
-
-        scene_collection.add(
-            embeddings=embeddings,
-            documents=texts,
-            metadatas=metadatas,
-            ids=ids
-        )
-
-        full_text = " ".join(texts)
-        st.session_state.full_texts[filename] = full_text
-
-        # Generate and store video-level metadata
-        with st.spinner("🧠 Generating AI video metadata..."):
-            video_meta = generate_video_metadata(full_text, filename, domain_hint, video_url)
-            video_meta_id = f"video_{filename}_{uuid.uuid4()}"
-            video_meta_collection.upsert(
-                ids=[video_meta_id],
-                metadatas=[video_meta],
-                documents=[full_text[:1000]]
-            )
-            # Also update session cache (decode JSON for internal use)
-            decoded_meta = {}
-            for key, value in video_meta.items():
-                if isinstance(value, str) and value.startswith(('{', '[')):
-                    try:
-                        decoded_meta[key] = json.loads(value)
-                    except:
-                        decoded_meta[key] = value
-                else:
-                    decoded_meta[key] = value
-            st.session_state.enriched_metadata[filename] = decoded_meta
-
-        build_bm25_index()
-        return len(valid_chunks), None
-    else:
-        return None, "Invalid source type"
-
-def process_file_optimized(uploaded_file, window: int, overlap: int, domain_hint: str = "general") -> Tuple[Optional[int], Optional[str]]:
-    """Process uploaded file (SRT/VTT)."""
-    if not COLLECTION_VALID:
-        return None, "Database is invalid. Please reset."
-
-    file_hash = get_file_hash(uploaded_file.getvalue())
-
-    # Deduplication
-    existing = scene_collection.get(where={"file_hash": file_hash})
-    if existing['ids']:
-        filename = existing['metadatas'][0].get('filename')
-        st.info(f"✅ {filename} already indexed (deduplicated)")
-        if filename not in st.session_state.full_texts:
-            all_texts = existing['documents']
-            st.session_state.full_texts[filename] = " ".join(all_texts)
-        return len(existing['ids']), None
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=uploaded_file.name) as tmp:
-        tmp.write(uploaded_file.getvalue())
-        tmp_path = tmp.name
-
-    filename = uploaded_file.name
-
-    if filename.endswith('.srt'):
-        chunks = sliding_window_chunks_srt(tmp_path, window, overlap)
-    elif filename.endswith('.vtt'):
-        chunks = sliding_window_chunks_vtt(tmp_path, window, overlap)
-    else:
-        os.unlink(tmp_path)
-        return None, "Unsupported file type."
-
-    valid_chunks = [c for c in chunks if c["text"].strip() and len(c["text"]) > 10]
-    if not valid_chunks:
-        os.unlink(tmp_path)
-        return 0, "No valid subtitle content found."
-
-    texts = [c["text"] for c in valid_chunks]
-    metadatas = []
-    for c in valid_chunks:
-        mins = int(c["start"] // 60)
-        secs = int(c["start"] % 60)
-        metadatas.append({
-            "filename": filename,
-            "file_hash": file_hash,
-            "start": c["start"],
-            "end": c["end"],
-            "duration": round(c["end"] - c["start"], 1),
-            "timecode": f"{mins}:{secs:02d}",
-            "subtitle_count": c.get("subtitle_count", 0),
-            "domain_hint": domain_hint,
-            "speaker": "unknown"
-        })
-
-    embeddings = get_embeddings_batch(texts)
-    if len(embeddings) != len(texts):
-        os.unlink(tmp_path)
-        return None, f"Embedding mismatch: {len(embeddings)} vs {len(texts)}"
-
-    # Per-chunk keyword tags (KeyBERT)
-    tags_list = []
-    for text in texts:
-        keywords = kw_model.extract_keywords(
-            text,
-            keyphrase_ngram_range=(1, 2),
-            stop_words='english',
-            top_n=3
-        )
-        tag_string = ", ".join([kw[0] for kw in keywords]) if keywords else "general"
-        tags_list.append(tag_string)
-    for i, tags in enumerate(tags_list):
-        metadatas[i]["tags"] = tags
-
-    ids = [f"{filename}_{i}_{uuid.uuid4()}" for i in range(len(texts))]
-
-    scene_collection.add(
-        embeddings=embeddings,
-        documents=texts,
-        metadatas=metadatas,
-        ids=ids
-    )
-
-    full_text = " ".join(texts)
-    st.session_state.full_texts[filename] = full_text
-
-    # Generate and store video-level metadata
-    with st.spinner("🧠 Generating AI video metadata..."):
-        video_meta = generate_video_metadata(full_text, filename, domain_hint)
-        video_meta_id = f"video_{filename}_{uuid.uuid4()}"
-        video_meta_collection.upsert(
-            ids=[video_meta_id],
-            metadatas=[video_meta],
-            documents=[full_text[:1000]]
-        )
-        decoded_meta = {}
-        for key, value in video_meta.items():
-            if isinstance(value, str) and value.startswith(('{', '[')):
-                try:
-                    decoded_meta[key] = json.loads(value)
-                except:
-                    decoded_meta[key] = value
-            else:
-                decoded_meta[key] = value
-        st.session_state.enriched_metadata[filename] = decoded_meta
-
-    os.unlink(tmp_path)
-    build_bm25_index()
-    return len(valid_chunks), None
-
-def delete_file(filename: str):
-    if not COLLECTION_VALID:
-        return
-    scene_collection.delete(where={"filename": filename})
-    existing_video = video_meta_collection.get(where={"filename": filename})
-    if existing_video['ids']:
-        video_meta_collection.delete(ids=existing_video['ids'])
-    if filename in st.session_state.full_texts:
-        del st.session_state.full_texts[filename]
-    if filename in st.session_state.enriched_metadata:
-        del st.session_state.enriched_metadata[filename]
-    build_bm25_index()
-
-# ------------------------------------------------------------------
-# EDITABLE TAGS (per video)
-# ------------------------------------------------------------------
-def render_editable_tags(video_filename: str, current_tags: List[str], key_prefix: str):
-    """Display tags as editable pills with add/remove."""
-    tags = current_tags if current_tags else []
-    edit_key = f"edit_tags_{video_filename}_{key_prefix}"
-    if edit_key not in st.session_state:
-        st.session_state[edit_key] = False
-
-    col1, col2 = st.columns([10, 1])
-    with col1:
-        if tags:
-            tag_html = " ".join([f'<span class="tag-pill editable" onclick="alert(\'Click edit button to modify\')">{tag}</span>' for tag in tags[:8]])
-            st.markdown(f"✏️ User tags: {tag_html}", unsafe_allow_html=True)
-        else:
-            st.caption("No user tags")
-    with col2:
-        if st.button("✏️", key=f"edit_btn_{video_filename}_{key_prefix}", help="Edit tags"):
-            st.session_state[edit_key] = True
-            st.rerun()
-
-    if st.session_state[edit_key]:
-        with st.container():
-            new_tag = st.text_input("Add tag", key=f"new_tag_{video_filename}_{key_prefix}")
-            col_add, col_done = st.columns([1, 1])
-            with col_add:
-                if st.button("➕ Add", key=f"add_{video_filename}_{key_prefix}"):
-                    if new_tag and new_tag not in tags:
-                        tags.append(new_tag)
-                        video_meta = st.session_state.enriched_metadata.get(video_filename, {})
-                        video_meta["user_tags"] = tags
-                        encoded_meta = {
-                            "user_tags": json.dumps(tags)
-                        }
-                        existing_video = video_meta_collection.get(where={"filename": video_filename})
-                        if existing_video['ids']:
-                            video_meta_collection.update(
-                                ids=[existing_video['ids'][0]],
-                                metadatas=[encoded_meta]
-                            )
-                        st.rerun()
-            with col_done:
-                if st.button("✓ Done", key=f"done_{video_filename}_{key_prefix}"):
-                    st.session_state[edit_key] = False
-                    st.rerun()
-            if tags:
-                st.write("**Current tags (click to remove):**")
-                for tag in tags[:10]:
-                    col_tag, col_rem = st.columns([5, 1])
-                    col_tag.write(f"- {tag}")
-                    if col_rem.button("✕", key=f"remove_{video_filename}_{tag}"):
-                        tags.remove(tag)
-                        video_meta = st.session_state.enriched_metadata.get(video_filename, {})
-                        video_meta["user_tags"] = tags
-                        encoded_meta = {
-                            "user_tags": json.dumps(tags)
-                        }
-                        existing_video = video_meta_collection.get(where={"filename": video_filename})
-                        if existing_video['ids']:
-                            video_meta_collection.update(
-                                ids=[existing_video['ids'][0]],
-                                metadatas=[encoded_meta]
-                            )
-                        st.rerun()
-
-# ------------------------------------------------------------------
-# SIDEBAR UI – Clean, collapsible, minimal
-# ------------------------------------------------------------------
 with st.sidebar:
-    col_logo, col_theme = st.columns([4, 1])
-    with col_logo:
-        st.title("🎥 Cairo")
-    with col_theme:
-        icon = "🌙" if st.session_state.theme == "dark" else "☀️"
-        if st.button(icon, key="theme_toggle", help="Toggle theme"):
-            st.session_state.theme = "light" if st.session_state.theme == "dark" else "dark"
-            st.rerun()
+    st.markdown('<div class="logo-mark">⚡ SEMANTIX</div>', unsafe_allow_html=True)
+    st.markdown("<div style='font-size:0.65rem;color:#4B5563;margin-top:2px;margin-bottom:16px'>Enterprise Video Intelligence</div>", unsafe_allow_html=True)
     st.divider()
 
-    with st.expander("🎛️ Scene Chunking", expanded=False):
-        window_size = st.slider("Window (s)", 10, 60, 30, 5)
-        overlap = st.slider("Overlap (s)", 5, 30, 15, 5)
-    st.divider()
-
-    st.subheader("📤 Upload Content")
-    domain_hint = st.selectbox(
-        "Domain",
-        ["general", "sports", "news", "entertainment", "education", "technology"],
-        index=0,
-        help="Improves AI metadata"
-    )
-
-    st.write("**Upload SRT/VTT files**")
-    uploaded_files = st.file_uploader(
-        "SRT/VTT",
-        type=['srt', 'vtt'],
-        accept_multiple_files=True,
-        label_visibility="collapsed",
-        key="file_uploader"
-    )
-    if uploaded_files and COLLECTION_VALID:
-        for f in uploaded_files:
-            with st.status(f"Processing {f.name}...", expanded=False):
-                cnt, err = process_file_optimized(f, window_size, overlap, domain_hint)
-                if err:
-                    st.error(err)
-                else:
-                    st.success(f"✅ {cnt} scenes")
-
-    st.divider()
-    st.write("**Or ingest from YouTube**")
-
-    # YouTube URL input – on Enter, process
-    youtube_url = st.text_input("YouTube URL", placeholder="https://youtu.be/...", key="youtube_url_input")
-
-    # Process if URL entered and changed
-    if youtube_url and youtube_url != st.session_state.get("last_youtube_url", ""):
-        st.session_state.last_youtube_url = youtube_url
-        video_id = extract_youtube_video_id(youtube_url)
-        if video_id:
-            st.session_state.current_youtube_id = video_id  # store for later use
-            # Check if already indexed
-            file_hash = hashlib.md5(video_id.encode()).hexdigest()
-            existing = scene_collection.get(where={"file_hash": file_hash})
-            if existing['ids']:
-                st.info(f"✅ YouTube video {video_id} already indexed")
-                st.session_state.youtube_status[video_id] = 'indexed'
-            else:
-                with st.status(f"Fetching subtitles for {video_id}...", expanded=False):
-                    entries = fetch_youtube_subtitles(video_id)
-                    if entries:
-                        cnt, err = process_video_source("youtube", video_id, window_size, overlap, domain_hint, youtube_url)
-                        if err:
-                            st.error(err)
-                            st.session_state.youtube_status[video_id] = 'error'
-                        else:
-                            st.success(f"✅ {cnt} scenes indexed from YouTube")
-                            st.session_state.youtube_status[video_id] = 'indexed'
-                    else:
-                        st.warning("No subtitles found for this YouTube video.")
-                        st.session_state.youtube_status[video_id] = 'not_found'
-        else:
-            st.error("Invalid YouTube URL")
-
-    # If we have a current video ID and its status is 'not_found', offer fallback upload
-    current_id = st.session_state.get("current_youtube_id")
-    if current_id and st.session_state.youtube_status.get(current_id) == 'not_found':
-        st.write(f"**Upload SRT file for video {current_id}**")
-        uploaded_srt = st.file_uploader(f"SRT for {current_id}", type=['srt', 'vtt'], key=f"srt_upload_{current_id}")
-        if uploaded_srt:
-            with st.status(f"Processing uploaded SRT for {current_id}...", expanded=False):
-                cnt, err = process_video_source(
-                    "youtube", current_id, window_size, overlap, domain_hint,
-                    st.session_state.last_youtube_url, uploaded_file=uploaded_srt.getvalue()
-                )
-                if err:
-                    st.error(err)
-                    st.session_state.youtube_status[current_id] = 'error'
-                else:
-                    st.success(f"✅ {cnt} scenes indexed (manual SRT)")
-                    st.session_state.youtube_status[current_id] = 'indexed'
-                    # Clear the current ID to hide uploader
-                    st.session_state.current_youtube_id = None
-                    st.rerun()
-
-    st.divider()
-
-    # Library stats
-    if COLLECTION_VALID:
-        try:
-            all_items = scene_collection.get()
-            total_chunks = len(all_items['ids'])
-            files_set = {m.get('filename') for m in all_items['metadatas'] if m.get('filename')}
-        except:
-            total_chunks, files_set = 0, set()
-    else:
-        total_chunks, files_set = 0, set()
-    st.metric("Videos", len(files_set))
-    st.metric("Scenes", f"{total_chunks:,}")
-
-    if files_set:
-        with st.expander("📁 Manage", expanded=False):
-            for fname in sorted(files_set):
-                c1, c2 = st.columns([5, 1])
-                c1.caption(fname[:20] + "…" if len(fname) > 20 else fname)
-                if c2.button("🗑️", key=f"del_{fname}"):
-                    delete_file(fname)
-                    st.rerun()
-            if st.button("🗑️ Clear All"):
-                for fname in files_set:
-                    delete_file(fname)
-                st.rerun()
-    st.divider()
-
-    with st.expander("⚙️ System", expanded=False):
-        if st.button("🔄 Reset DB"):
-            st.cache_resource.clear()
-            persist_dir = os.path.join(os.path.dirname(__file__), "chroma_db")
-            client = chromadb.PersistentClient(path=persist_dir)
-            try:
-                client.delete_collection("cairo_subtitles")
-                client.delete_collection("video_metadata")
-            except:
-                pass
-            st.session_state.collection = None
-            st.session_state.video_meta_collection = None
-            st.session_state.enriched_metadata = {}
-            st.session_state.full_texts = {}
-            st.session_state.last_youtube_url = ""
-            st.session_state.current_youtube_id = None
-            st.session_state.youtube_status = {}
+    for page_id, icon, label in NAV_PAGES:
+        active = st.session_state.page == page_id
+        style = "color:#FFAA00 !important;border-color:rgba(255,170,0,0.4) !important;background:rgba(255,170,0,0.08) !important;" if active else ""
+        if st.button(f"{icon}  {label}", key=f"nav_{page_id}",
+                     use_container_width=True):
+            st.session_state.page = page_id
             st.rerun()
 
-# ------------------------------------------------------------------
-# MAIN SEARCH AREA
-# ------------------------------------------------------------------
-st.title("🔍 Semantic Video Search")
-st.markdown("Natural language search for your video library.")
+    st.divider()
 
-# Search history
-if st.session_state.search_history:
-    with st.expander("📜 Recent Searches", expanded=False):
-        cols = st.columns(min(5, len(st.session_state.search_history)))
-        for i, (q, _) in enumerate(reversed(st.session_state.search_history[-5:])):
-            if cols[i % 5].button(f"\"{q[:15]}…\"", key=f"hist_{i}"):
-                st.session_state.last_query = q
-                st.rerun()
+    # Video selector
+    if st.session_state.videos:
+        st.markdown("**Loaded Videos**")
+        video_options = ["— All Videos —"] + [
+            f"{v.title[:28]}…" if len(v.title) > 28 else v.title
+            for v in st.session_state.videos.values()
+        ]
+        video_ids = [None] + list(st.session_state.videos.keys())
+        sel = st.selectbox("Select video", video_options, key="video_selector",
+                           label_visibility="collapsed")
+        sel_idx = video_options.index(sel)
+        st.session_state.selected_video = video_ids[sel_idx]
 
-# Main query input
-col_q, col_adv = st.columns([5, 1])
-with col_q:
-    query = st.text_input(
-        "Query",
-        placeholder="e.g., 'who won India vs Australia match'",
-        value=st.session_state.last_query,
-        label_visibility="collapsed"
-    )
-with col_adv:
-    if st.button("⚙️", help="Advanced options"):
-        st.session_state.show_advanced = not st.session_state.show_advanced
+    # Stats
+    se_stats = st.session_state.search_engine.stats
+    if se_stats["total_scenes"] > 0:
+        st.divider()
+        st.markdown(f"""
+        <div style='font-size:0.7rem;color:#6B7280'>
+            <div>🎬 <strong style='color:#9AA0B0'>{se_stats['total_videos']}</strong> videos indexed</div>
+            <div style='margin-top:4px'>🎞️ <strong style='color:#9AA0B0'>{se_stats['total_scenes']}</strong> scenes indexed</div>
+            <div style='margin-top:4px'>📚 <strong style='color:#9AA0B0'>{se_stats['vocab_size']:,}</strong> vocab terms</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-# Advanced options
-if st.session_state.show_advanced:
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        n_results = st.number_input("Results", 1, 20, 5)
-    with col2:
-        diversify = st.checkbox("Diversify", value=True)
-    with col3:
-        lambda_param = st.slider("Diversity λ", 0.0, 1.0, 0.6, 0.1)
-    with col4:
-        min_score = st.slider("Min score", -5.0, 5.0, -3.0, 0.5)
-    n_candidates = st.number_input("Candidates", 20, 200, 100, step=10)
-else:
-    n_results, diversify, lambda_param, min_score, n_candidates = 5, True, 0.6, -3.0, 100
+    st.divider()
+    yt_key = st.text_input("YouTube API Key (optional)", type="password",
+                            value=st.session_state.yt_api_key,
+                            key="yt_key_input", label_visibility="visible")
+    if yt_key != st.session_state.yt_api_key:
+        st.session_state.yt_api_key = yt_key
 
-# Filter by video
-if files_set and len(files_set) > 1:
-    with st.expander("🎯 Filter by Video", expanded=False):
-        filter_choice = st.selectbox(
-            "Narrow to",
-            ["All files"] + sorted(files_set),
-            index=0
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+def _register_video(vm: VideoMetadata):
+    """Add video to session state, index scenes, sync ad engine vocab."""
+    st.session_state.videos[vm.video_id] = vm
+    st.session_state.search_engine.add_scenes(vm.scenes)
+    # Sync ad embeddings to the same vocabulary space so cosine similarity
+    # between scene and ad vectors is valid (shared vocab = aligned space).
+    if st.session_state.search_engine.vectorizer is not None:
+        st.session_state.ad_engine.sync_vectorizer(
+            st.session_state.search_engine.vectorizer
         )
-        st.session_state.filter_filename = filter_choice if filter_choice != "All files" else None
-else:
-    st.session_state.filter_filename = None
+    st.session_state.selected_video = vm.video_id
 
-# Search execution
-if query and COLLECTION_VALID:
-    if query != st.session_state.last_query:
-        st.session_state.search_history.append((query, datetime.now().strftime("%H:%M")))
-        st.session_state.search_history = st.session_state.search_history[-20:]
-    st.session_state.last_query = query
 
-    domain = detect_domain(query)
-    rewritten = rewrite_query_with_llm(query, domain)
-    if rewritten != query and MISTRAL_API_KEY:
-        st.caption(f"✨ Expanded: *{rewritten}*")
+def _sentiment_color(label: str) -> str:
+    return {"positive": "#36D399", "negative": "#FF5252", "neutral": "#9AA0B0"}.get(label, "#9AA0B0")
 
-    cache_key = f"{rewritten}_{n_candidates}_{st.session_state.filter_filename}"
-    if cache_key in st.session_state.result_cache:
-        results = st.session_state.result_cache[cache_key]
-        st.toast("⚡ Results from cache", icon="⚡")
-    else:
-        with st.status("🔍 Searching...", expanded=False):
-            results = search_subtitles(
-                rewritten,
-                n_final=n_candidates,
-                n_candidates=n_candidates * 2,
-                diversify=False,
-                lambda_param=lambda_param,
-                min_score=min_score
+
+def _safety_color(score: float) -> str:
+    if score >= 0.8: return "#36D399"
+    if score >= 0.5: return "#FFAA00"
+    return "#FF5252"
+
+
+def _score_bar(score: float, color: str = "#FFAA00", width: int = 100) -> str:
+    pct = int(score * 100)
+    return f"""<div style='width:{width}%;background:rgba(255,255,255,0.06);border-radius:3px;height:5px;margin-top:5px'>
+        <div style='width:{pct}%;background:{color};border-radius:3px;height:5px'></div></div>"""
+
+
+def _iab_tags(iab_list: list[dict], max_n: int = 3) -> str:
+    colors = ["tag-amber", "tag-blue", "tag-purple"]
+    tags = ""
+    for i, cat in enumerate(iab_list[:max_n]):
+        cls = colors[i % len(colors)]
+        tags += f'<span class="tag {cls}">{cat["name"]}</span>'
+    return tags
+
+
+def _render_scene_card(scene: Scene, is_key: bool = False, show_ads: bool = False):
+    safety = scene.brand_safety.get("safety_score", 1.0)
+    sentiment = scene.sentiment
+    card_class = "scene-card key" if is_key else "scene-card"
+    key_badge = '<span class="tag tag-amber">★ KEY SCENE</span>' if is_key else ""
+
+    iab_html = _iab_tags(scene.iab_categories)
+    safety_html = f'<span style="color:{_safety_color(safety)};font-size:0.72rem;font-family:\'JetBrains Mono\',monospace">🛡 {safety:.0%}</span>'
+    sentiment_html = f'<span style="color:{_sentiment_color(sentiment.get("label","neutral"))};font-size:0.72rem">● {sentiment.get("label","neutral").title()}</span>'
+
+    st.markdown(f"""
+    <div class="{card_class}">
+        <div style='display:flex;justify-content:space-between;align-items:flex-start'>
+            <div>
+                <span style='font-family:"JetBrains Mono",monospace;color:#FFAA00;font-size:0.75rem'>
+                    {scene.start_fmt} → {scene.end_fmt}
+                </span>
+                <span style='color:#4B5563;font-size:0.72rem;margin-left:10px'>
+                    {scene.duration_sec:.0f}s · {len(scene.text.split())} words
+                </span>
+            </div>
+            <div>{key_badge} {safety_html} {sentiment_html}</div>
+        </div>
+        <p style='margin:8px 0 6px;font-size:0.85rem;color:#C4C9D8;line-height:1.5'>
+            {scene.text[:200]}{"…" if len(scene.text) > 200 else ""}
+        </p>
+        <div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>
+            {iab_html}
+            <span style='color:#4B5563;font-size:0.7rem'>eng: {scene.engagement_score:.2f}</span>
+            <span style='color:#4B5563;font-size:0.7rem'>ad: {scene.ad_suitability:.2f}</span>
+        </div>
+        {_score_bar(scene.ad_suitability, "#FFAA00")}
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 1: PROCESS VIDEO
+# ══════════════════════════════════════════════════════════════════════════════
+def page_process():
+    st.markdown("""
+    <div class="page-header">
+        <span class="page-icon">🎬</span>
+        <div>
+            <div class="page-title">Process Video</div>
+            <div class="page-subtitle">Upload subtitles or fetch from YouTube to extract semantic scenes</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    tab1, tab2, tab3 = st.tabs(["📁 Upload File", "▶ YouTube URL", "📝 Paste Text"])
+
+    # ── Tab 1: File Upload ────────────────────────────────────────────────────
+    with tab1:
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            uploaded = st.file_uploader(
+                "Drop your SRT or VTT subtitle file here",
+                type=["srt", "vtt"],
+                help="Supports SRT and WebVTT formats",
             )
-            if st.session_state.filter_filename:
-                results = [r for r in results if r['metadata']['filename'] == st.session_state.filter_filename]
-            if diversify:
-                results = diversify_results(results, lambda_param=lambda_param, top_k=n_results)
-            else:
-                results = results[:n_results]
-            st.session_state.result_cache[cache_key] = results
-            if len(st.session_state.result_cache) > 50:
-                oldest = min(st.session_state.result_cache.keys(), key=lambda k: st.session_state.result_cache[k][1] if isinstance(st.session_state.result_cache[k], tuple) else 0)
-                del st.session_state.result_cache[oldest]
+            video_title = st.text_input("Video Title (optional)", placeholder="My Awesome Video")
 
-    if results:
-        if len(results) > 0:
-            export_df = pd.DataFrame([
-                {
-                    "File": r['metadata']['filename'],
-                    "Timecode": r['metadata']['timecode'],
-                    "Duration": r['metadata']['duration'],
-                    "Confidence": f"{(r['score']+5)/20*100:.0f}%",
-                    "Text": r['text'][:100]
-                } for r in results
-            ])
-            csv = export_df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                "📥 Export CSV",
-                data=csv,
-                file_name=f"cairo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv"
+        with col2:
+            st.markdown("**Detection Settings**")
+            min_scene = st.slider("Min scene length (s)", 10, 60, 20)
+            max_scene = st.slider("Max scene length (s)", 60, 300, 120)
+            threshold = st.slider("Semantic sensitivity", 0.2, 0.7, 0.35, 0.05,
+                                  help="Higher = fewer but more distinct scenes")
+
+        if uploaded and st.button("🚀 Process Subtitles", use_container_width=True):
+            content = uploaded.read().decode("utf-8", errors="replace")
+            title = video_title or uploaded.name
+            fmt = "vtt" if uploaded.name.lower().endswith(".vtt") else "srt"
+
+            with st.spinner("Parsing subtitles and detecting scenes…"):
+                t0 = time.time()
+                processor = VideoProcessor(min_scene, max_scene, threshold)
+                vm = processor.process_file(content, title, fmt)
+                elapsed = time.time() - t0
+
+            if not vm.scenes:
+                st.error("No scenes detected. Check your file format.")
+                return
+
+            _register_video(vm)
+            st.success(f"✓ Processed in {elapsed:.2f}s")
+            _show_processing_summary(vm)
+
+    # ── Tab 2: YouTube URL ────────────────────────────────────────────────────
+    with tab2:
+        yt_url = st.text_input("YouTube URL or Video ID",
+                               placeholder="https://youtube.com/watch?v=... or video ID")
+        col1, col2 = st.columns(2)
+        with col1:
+            min_s2 = st.slider("Min scene (s)", 10, 60, 20, key="yt_min")
+            max_s2 = st.slider("Max scene (s)", 60, 300, 120, key="yt_max")
+        with col2:
+            thr2 = st.slider("Sensitivity", 0.2, 0.7, 0.35, 0.05, key="yt_thr")
+
+        if st.button("▶ Fetch & Process", use_container_width=True):
+            vid_id = _extract_yt_id(yt_url)
+            if not vid_id:
+                st.error("Could not parse YouTube video ID from URL.")
+                return
+
+            with st.spinner("Fetching YouTube transcript…"):
+                transcript = fetch_youtube_transcript(vid_id)
+
+            if transcript is None:
+                st.error("Could not fetch transcript. The video may not have captions, "
+                         "or youtube-transcript-api may not be installed.\n\n"
+                         "Install: `pip install youtube-transcript-api`")
+                return
+
+            meta = None
+            if st.session_state.yt_api_key:
+                with st.spinner("Fetching YouTube metadata…"):
+                    meta = fetch_youtube_metadata(vid_id, st.session_state.yt_api_key)
+
+            title = meta.get("title", f"YouTube: {vid_id}") if meta else f"YouTube: {vid_id}"
+
+            with st.spinner("Detecting scenes…"):
+                t0 = time.time()
+                processor = VideoProcessor(min_s2, max_s2, thr2)
+                vm = processor.process_youtube_transcript(transcript, vid_id, title, meta)
+                elapsed = time.time() - t0
+
+            _register_video(vm)
+            st.success(f"✓ Processed {len(vm.scenes)} scenes in {elapsed:.2f}s")
+            _show_processing_summary(vm)
+
+    # ── Tab 3: Paste Text ─────────────────────────────────────────────────────
+    with tab3:
+        paste_title = st.text_input("Video Title", placeholder="My Video", key="paste_title")
+        pasted = st.text_area(
+            "Paste SRT or VTT content here",
+            height=250,
+            placeholder="1\n00:00:01,000 --> 00:00:05,000\nHello, welcome to our show...",
+        )
+        min_s3 = st.slider("Min scene (s)", 10, 60, 20, key="p_min")
+        max_s3 = st.slider("Max scene (s)", 60, 300, 120, key="p_max")
+
+        if pasted and st.button("🚀 Process Text", use_container_width=True):
+            title = paste_title or "Pasted Subtitles"
+            with st.spinner("Processing…"):
+                t0 = time.time()
+                processor = VideoProcessor(min_s3, max_s3)
+                vm = processor.process_file(pasted, title)
+                elapsed = time.time() - t0
+
+            if not vm.scenes:
+                st.error("No scenes detected. Check your subtitle format.")
+                return
+
+            _register_video(vm)
+            st.success(f"✓ {len(vm.scenes)} scenes in {elapsed:.2f}s")
+            _show_processing_summary(vm)
+
+
+def _extract_yt_id(url: str) -> Optional[str]:
+    patterns = [
+        r"(?:v=|youtu\.be/|embed/|shorts/)([A-Za-z0-9_-]{11})",
+        r"^([A-Za-z0-9_-]{11})$",
+    ]
+    for p in patterns:
+        m = re.search(p, url)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _show_processing_summary(vm: VideoMetadata):
+    st.markdown("---")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Scenes Detected", vm.scene_count)
+    c2.metric("Duration", vm.fmt_duration())
+    c3.metric("Total Cues", vm.total_cues)
+    avg_dur = round(sum(s.duration_sec for s in vm.scenes) / max(vm.scene_count, 1), 1)
+    c4.metric("Avg Scene", f"{avg_dur}s")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Narrative Structure**")
+        st.markdown(f"<span class='tag tag-amber'>{vm.narrative_structure}</span>", unsafe_allow_html=True)
+        st.markdown("**Dominant Topics**")
+        for cat in vm.dominant_iab[:4]:
+            st.markdown(f"<span class='tag tag-blue'>{cat['name']}</span>", unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("**Emotional Arc**")
+        if vm.emotional_arc:
+            arc_df = pd.DataFrame(vm.emotional_arc)
+            fig = px.area(arc_df, x="start_sec", y="sentiment_score",
+                          color_discrete_sequence=["#FFAA00"])
+            fig.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.2)")
+            fig.update_layout(**PLOTLY_THEME,
+                              height=200, showlegend=False,
+                              title=dict(text="", x=0),
+                              xaxis_title="Time (s)", yaxis_title="Sentiment")
+            st.plotly_chart(fig, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 2: SEMANTIC SEARCH
+# ══════════════════════════════════════════════════════════════════════════════
+def page_search():
+    st.markdown("""
+    <div class="page-header">
+        <span class="page-icon">🔍</span>
+        <div>
+            <div class="page-title">Semantic Search</div>
+            <div class="page-subtitle">Natural language discovery across all indexed scenes</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    se = st.session_state.search_engine
+    if se.stats["total_scenes"] == 0:
+        st.info("No videos indexed yet. Process a video first.")
+        return
+
+    col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+    with col1:
+        query = st.text_input("", placeholder="🔍  Search: 'emotional confrontation between characters'…",
+                              label_visibility="collapsed")
+    with col2:
+        top_k = st.selectbox("Results", [5, 10, 20], index=1, label_visibility="collapsed")
+    with col3:
+        min_safety = st.selectbox("Safety", ["Any", "Safe (0.5+)", "Brand Safe (0.8+)"],
+                                  label_visibility="collapsed")
+        safety_map = {"Any": 0.0, "Safe (0.5+)": 0.5, "Brand Safe (0.8+)": 0.8}
+        min_safety_val = safety_map[min_safety]
+    with col4:
+        diversify = st.checkbox("Diversify", value=True)
+
+    # IAB filter
+    iab_choices = ["— All —"] + [f"{k}: {v}" for k, v in _IAB_NAMES.items()]
+    iab_sel = st.multiselect("Filter by IAB Category", iab_choices,
+                              default=[], label_visibility="collapsed",
+                              placeholder="Filter by content category…")
+    iab_filter = [s.split(":")[0] for s in iab_sel if s != "— All —"] or None
+
+    # Video filter
+    if len(st.session_state.videos) > 1:
+        vid_choices = ["All Videos"] + [
+            f"{vm.title}" for vm in st.session_state.videos.values()
+        ]
+        vid_ids = [None] + list(st.session_state.videos.keys())
+        vid_sel = st.selectbox("Filter by Video", vid_choices, label_visibility="collapsed")
+        vid_filter = vid_ids[vid_choices.index(vid_sel)]
+    else:
+        vid_filter = None
+
+    if query:
+        with st.spinner("Searching…"):
+            results = se.search(
+                query, top_k=top_k, diversify=diversify,
+                video_id=vid_filter, min_safety=min_safety_val,
+                iab_filter=iab_filter, expand=True,
             )
 
-        if 'result_offset' not in st.session_state:
-            st.session_state.result_offset = 0
-        start = st.session_state.result_offset
-        end = min(start + 5, len(results))
-        for i, r in enumerate(results[start:end], start=start):
-            meta = r['metadata']
-            score = r['score']
-            norm_score = max(0, min(1, (score + 5) / 20))
+        if not results:
+            st.warning("No results found. Try a different query or adjust filters.")
+            return
 
-            with st.container():
-                st.markdown(f'<div class="result-card">', unsafe_allow_html=True)
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    fname = meta['filename'][:30] + "…" if len(meta['filename']) > 30 else meta['filename']
-                    st.markdown(f"**{fname}**")
-                    st.caption(f"⏱️ {meta['timecode']} | 📏 {meta['duration']}s")
-                with col2:
-                    st.markdown(f"<span class='confidence-badge'>{norm_score*100:.0f}%</span>", unsafe_allow_html=True)
-                st.progress(norm_score)
+        st.markdown(f"<div style='color:#6B7280;font-size:0.78rem;margin-bottom:12px'>Found <strong style='color:#FFAA00'>{len(results)}</strong> scenes</div>", unsafe_allow_html=True)
 
-                if meta.get("tags") and meta["tags"] != "general":
-                    scene_tags = [t.strip() for t in meta["tags"].split(", ") if t.strip() and t != "general"][:6]
-                    scene_tag_html = " ".join([f'<span class="tag-pill">{tag}</span>' for tag in scene_tags])
-                    st.markdown(f"🎬 Scene tags: {scene_tag_html}", unsafe_allow_html=True)
+        for r in results:
+            scene = r.scene
+            vm = st.session_state.videos.get(scene.video_id)
+            video_title = vm.title if vm else scene.video_id
+            is_key = vm and scene.scene_id in vm.key_scenes if vm else False
 
-                video_meta = st.session_state.enriched_metadata.get(meta['filename'], {})
-                video_keywords = video_meta.get('keywords', [])
-                if video_keywords:
-                    kw_html = " ".join([f'<span class="tag-pill">{kw}</span>' for kw in video_keywords[:6]])
-                    st.markdown(f"📌 Video keywords: {kw_html}", unsafe_allow_html=True)
+            safety = scene.brand_safety.get("safety_score", 1.0)
+            iab_html = _iab_tags(scene.iab_categories)
+            sentiment = scene.sentiment
 
-                iab_cats = video_meta.get('iab_categories', [])
-                if iab_cats:
-                    iab_html = " ".join([f'<span class="iab-badge">{cat}</span>' for cat in iab_cats[:3]])
-                    st.markdown(f"📺 {iab_html}", unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="search-result-card">
+                <div style='display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px'>
+                    <div>
+                        <span style='color:#FFAA00;font-weight:700;font-size:0.9rem'>#{r.rank}</span>
+                        <span style='color:#4B5563;font-size:0.75rem;margin-left:8px'>{video_title}</span>
+                        {"<span class='tag tag-amber' style='margin-left:8px'>★ KEY</span>" if is_key else ""}
+                    </div>
+                    <div style='font-family:"JetBrains Mono",monospace;color:#FFAA00;font-size:0.75rem'>
+                        score: {r.score:.3f}
+                    </div>
+                </div>
+                <div style='font-family:"JetBrains Mono",monospace;color:#6B7280;font-size:0.72rem;margin-bottom:6px'>
+                    ⏱ {scene.start_fmt} → {scene.end_fmt}  ·  {scene.duration_sec:.0f}s
+                </div>
+                <p style='color:#C4C9D8;font-size:0.88rem;line-height:1.55;margin:0 0 10px'>
+                    {scene.text[:280]}{"…" if len(scene.text) > 280 else ""}
+                </p>
+                <div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap'>
+                    {iab_html}
+                    <span style='color:{_sentiment_color(sentiment.get("label","neutral"))};font-size:0.7rem'>
+                        ● {sentiment.get("label","").title()}
+                    </span>
+                    <span style='color:{_safety_color(safety)};font-size:0.7rem'>
+                        🛡 {safety:.0%}
+                    </span>
+                    <span style='color:#4B5563;font-size:0.7rem'>
+                        vec:{r.vector_score:.2f} bm25:{r.bm25_score:.2f}
+                    </span>
+                </div>
+                {_score_bar(r.score)}
+            </div>
+            """, unsafe_allow_html=True)
 
-                sentiment = video_meta.get('sentiment')
-                tone = video_meta.get('tone')
-                if sentiment or tone:
-                    sentiment_html = ""
-                    if sentiment:
-                        sentiment_html += f'<span class="sentiment-tag">Sentiment: {sentiment}</span> '
-                    if tone:
-                        sentiment_html += f'<span class="sentiment-tag">Tone: {tone}</span>'
-                    st.markdown(f"🎭 {sentiment_html}", unsafe_allow_html=True)
-
-                user_tags = video_meta.get('user_tags', [])
-                render_editable_tags(meta['filename'], user_tags, f"scene_{i}")
-
-                with st.expander("💬 Transcript"):
-                    st.write(r['text'][:500] + ("…" if len(r['text']) > 500 else ""))
-
-                col_b1, col_b2 = st.columns(2)
-                with col_b1:
-                    # --- JUMP TO BUTTON WITH CONFIRMATION ---
-                    if st.button("▶️ Jump to", key=f"jump_{i}", use_container_width=True):
-                        # If something is already playing, ask for confirmation
-                        if st.session_state.currently_playing is not None:
-                            st.session_state.pending_switch = r
-                            st.rerun()
-                        else:
-                            # Nothing playing – load immediately
-                            st.session_state.selected_result = r
-                            st.session_state.currently_playing = f"{meta['filename']}_{meta['start']}"
-                            st.rerun()
-                with col_b2:
-                    st.download_button(
-                        "📄 JSON",
-                        data=json.dumps(r, indent=2),
-                        file_name=f"scene_{i}_{int(meta['start'])}.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
-                st.markdown('</div>', unsafe_allow_html=True)
-
-        # --- CONFIRMATION POPOVER FOR PENDING SWITCH ---
-        if st.session_state.pending_switch is not None:
-            with st.popover("🎬 Switch Video", use_container_width=True):
-                st.warning("A video is already playing. Do you want to switch to the new moment?")
-                col_yes, col_no = st.columns(2)
-                with col_yes:
-                    if st.button("Yes, switch", use_container_width=True):
-                        r = st.session_state.pending_switch
-                        meta = r['metadata']
-                        st.session_state.selected_result = r
-                        st.session_state.currently_playing = f"{meta['filename']}_{meta['start']}"
-                        st.session_state.pending_switch = None
-                        st.rerun()
-                with col_no:
-                    if st.button("No, keep current", use_container_width=True):
-                        st.session_state.pending_switch = None
-                        st.rerun()
-
-        if end < len(results):
-            if st.button("⬇️ Load more", use_container_width=True):
-                st.session_state.result_offset = end
-                st.rerun()
-        elif st.session_state.result_offset > 0:
-            if st.button("⬆️ Show less", use_container_width=True):
-                st.session_state.result_offset = 0
-                st.rerun()
     else:
-        st.warning("No results. Try a different query or adjust filters.")
+        # Show search suggestions
+        st.markdown("**Suggested Queries**")
+        suggestions = [
+            "exciting action sequence", "emotional dialogue",
+            "product demonstration", "travel destination",
+            "health and wellness advice", "financial discussion",
+            "comedy moment", "suspenseful scene",
+        ]
+        cols = st.columns(4)
+        for i, sug in enumerate(suggestions):
+            if cols[i % 4].button(sug, key=f"sug_{i}"):
+                st.session_state["_search_q"] = sug
+                st.rerun()
 
-elif COLLECTION_VALID and total_chunks == 0:
-    st.info("👋 Upload subtitle files or a YouTube URL to start searching.")
-else:
-    st.info("✨ Enter a query above to search your library.")
 
-# ------------------------------------------------------------------
-# SELECTED MOMENT DETAIL (with embedded YouTube player using iframe)
-# ------------------------------------------------------------------
-if st.session_state.selected_result:
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 3: SCENE EXPLORER
+# ══════════════════════════════════════════════════════════════════════════════
+def page_scenes():
+    st.markdown("""
+    <div class="page-header">
+        <span class="page-icon">📺</span>
+        <div>
+            <div class="page-title">Scene Explorer</div>
+            <div class="page-subtitle">Browse and analyse every detected scene</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not st.session_state.videos:
+        st.info("No videos processed yet.")
+        return
+
+    vm = _get_active_video()
+    if not vm:
+        return
+
+    # Video summary header
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Scenes", vm.scene_count)
+    c2.metric("Duration", vm.fmt_duration())
+    avg_eng = round(sum(s.engagement_score for s in vm.scenes) / max(vm.scene_count, 1), 2)
+    c3.metric("Avg Engagement", avg_eng)
+    avg_safe = round(sum(s.brand_safety.get("safety_score", 1.0) for s in vm.scenes) / max(vm.scene_count, 1), 2)
+    c4.metric("Avg Safety", f"{avg_safe:.0%}")
+    c5.metric("Narrative", vm.narrative_structure.split("(")[0].strip())
+
     st.divider()
-    st.subheader("🎬 Selected Moment")
-    sel = st.session_state.selected_result
-    meta_sel = sel['metadata']
-    video_meta = st.session_state.enriched_metadata.get(meta_sel['filename'], {})
-    video_url = video_meta.get('video_url', '')
 
-    col_vid, col_info = st.columns([2, 1])
-    with col_vid:
-        if video_url and 'youtu' in video_url:
-            t = int(meta_sel['start'])
-            if 'watch?v=' in video_url:
-                video_id = video_url.split('v=')[1].split('&')[0]
-            elif 'youtu.be/' in video_url:
-                video_id = video_url.split('/')[-1].split('?')[0]
-            else:
-                video_id = None
-            if video_id:
-                # Build embed URL with start time and autoplay
-                embed_url = f"https://www.youtube.com/embed/{video_id}?start={t}&autoplay=1&enablejsapi=1"
-                # Use iframe to ensure start time works
-                iframe_html = f"""
-                <iframe width="100%" height="400" src="{embed_url}" 
-                        title="YouTube video player" frameborder="0" 
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-                        allowfullscreen></iframe>
-                """
-                st.components.v1.html(iframe_html, height=410)
-            else:
-                st.markdown('<div class="video-preview-placeholder">🎬 YouTube video (embed failed)</div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="video-preview-placeholder">🎬 Video Preview (integration point)</div>', unsafe_allow_html=True)
-        st.caption(f"⏱️ {meta_sel['timecode']} in {meta_sel['filename']}")
-        if video_url:
-            t = int(meta_sel['start'])
-            if 'watch?v=' in video_url:
-                base = video_url.split('&')[0]
-                jump_url = f"{base}&t={t}s"
-            elif 'youtu.be/' in video_url:
-                base = video_url.split('?')[0]
-                jump_url = f"{base}?t={t}s"
-            else:
-                jump_url = video_url
-            st.link_button("▶️ Open in YouTube", jump_url, use_container_width=True)
-    with col_info:
-        st.markdown("**📝 Context**")
-        st.write(sel['text'][:200] + "…")
-        st.markdown("**🏷️ Video Metadata**")
-        if video_meta:
-            st.markdown(f"*Summary:* {video_meta.get('summary', 'N/A')}")
-            st.markdown(f"*Themes:* {', '.join(video_meta.get('themes', [])[:5])}")
-            st.markdown(f"*IAB:* {', '.join(video_meta.get('iab_categories', []))}")
-            st.markdown(f"*Sentiment:* {video_meta.get('sentiment', 'N/A')}")
-            st.markdown(f"*Tone:* {video_meta.get('tone', 'N/A')}")
-        else:
-            st.caption("No video metadata yet.")
-        render_editable_tags(meta_sel['filename'], video_meta.get('user_tags', []), "detail")
+    # Visualisations
+    tab1, tab2, tab3 = st.tabs(["🎭 Emotional Arc", "📊 Scene Analysis", "🗂 Scene List"])
 
-    if st.button("← Back"):
-        st.session_state.selected_result = None
-        st.session_state.currently_playing = None
-        st.rerun()
+    with tab1:
+        if vm.emotional_arc:
+            df = pd.DataFrame(vm.emotional_arc)
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=df["start_sec"], y=df["sentiment_score"],
+                fill="tozeroy", fillcolor="rgba(255,170,0,0.12)",
+                line=dict(color="#FFAA00", width=2),
+                mode="lines+markers", marker=dict(size=6, color="#FFAA00"),
+                name="Sentiment",
+                hovertemplate="<b>%{x:.0f}s</b><br>Sentiment: %{y:.3f}<extra></extra>",
+            ))
+            fig.add_trace(go.Scatter(
+                x=df["start_sec"], y=df["engagement"],
+                line=dict(color="#36D399", width=2, dash="dot"),
+                mode="lines", name="Engagement",
+                hovertemplate="<b>%{x:.0f}s</b><br>Engagement: %{y:.3f}<extra></extra>",
+            ))
+            fig.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.15)")
+
+            # Mark key scenes
+            for kid in vm.key_scenes:
+                ks = next((s for s in vm.scenes if s.scene_id == kid), None)
+                if ks:
+                    fig.add_vline(x=ks.start_sec, line_dash="dash",
+                                  line_color="rgba(255,170,0,0.4)")
+
+            fig.update_layout(**PLOTLY_THEME, height=320, showlegend=True,
+                              title=dict(text="Emotional Arc + Engagement Over Time",
+                                         font=dict(size=13, color="#E2E4EA")),
+                              xaxis_title="Time (seconds)",
+                              yaxis_title="Score",
+                              legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#9AA0B0")))
+            st.plotly_chart(fig, use_container_width=True)
+
+    with tab2:
+        c1, c2 = st.columns(2)
+        with c1:
+            # IAB distribution
+            iab_counts: dict[str, int] = {}
+            for s in vm.scenes:
+                for cat in s.iab_categories[:1]:
+                    iab_counts[cat["name"]] = iab_counts.get(cat["name"], 0) + 1
+            if iab_counts:
+                df_iab = pd.DataFrame(
+                    sorted(iab_counts.items(), key=lambda x: x[1], reverse=True)[:8],
+                    columns=["Category", "Scenes"]
+                )
+                fig = px.bar(df_iab, x="Scenes", y="Category", orientation="h",
+                             color_discrete_sequence=["#FFAA00"])
+                fig.update_layout(**PLOTLY_THEME, height=300,
+                                  title=dict(text="Top IAB Categories", font=dict(size=12, color="#E2E4EA")),
+                                  yaxis=dict(autorange="reversed", **PLOTLY_THEME["yaxis"]))
+                st.plotly_chart(fig, use_container_width=True)
+
+        with c2:
+            # Safety distribution
+            safety_scores = [s.brand_safety.get("safety_score", 1.0) for s in vm.scenes]
+            fig = px.histogram(safety_scores, nbins=10,
+                               color_discrete_sequence=["#36D399"],
+                               labels={"value": "Safety Score", "count": "Scenes"})
+            fig.update_layout(**PLOTLY_THEME, height=300,
+                              title=dict(text="Brand Safety Distribution", font=dict(size=12, color="#E2E4EA")),
+                              showlegend=False, xaxis_title="Safety Score", yaxis_title="Scene Count")
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Engagement heatmap
+        eng_scores = [s.engagement_score for s in vm.scenes]
+        suit_scores = [s.ad_suitability for s in vm.scenes]
+        times = [s.start_sec for s in vm.scenes]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=times, y=eng_scores,
+            mode="markers", marker=dict(
+                size=[s * 20 + 4 for s in suit_scores],
+                color=eng_scores, colorscale="YlOrRd",
+                showscale=True, colorbar=dict(title="Engagement", tickfont=dict(color="#9AA0B0")),
+            ),
+            hovertemplate="<b>%{x:.0f}s</b><br>Engagement: %{y:.3f}<extra></extra>",
+        ))
+        fig.update_layout(**PLOTLY_THEME, height=280,
+                          title=dict(text="Scene Engagement Map (bubble size = ad suitability)",
+                                     font=dict(size=12, color="#E2E4EA")),
+                          xaxis_title="Time (s)", yaxis_title="Engagement")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tab3:
+        # Filters
+        fc1, fc2, fc3 = st.columns(3)
+        with fc1:
+            sent_f = st.multiselect("Sentiment", ["positive", "neutral", "negative"],
+                                    default=["positive", "neutral", "negative"])
+        with fc2:
+            min_eng = st.slider("Min engagement", 0.0, 1.0, 0.0, 0.05)
+        with fc3:
+            min_safe = st.slider("Min safety", 0.0, 1.0, 0.0, 0.05)
+
+        filtered = [
+            s for s in vm.scenes
+            if s.sentiment.get("label", "neutral") in sent_f
+            and s.engagement_score >= min_eng
+            and s.brand_safety.get("safety_score", 1.0) >= min_safe
+        ]
+
+        st.markdown(f"<div style='color:#6B7280;font-size:0.78rem;margin-bottom:10px'>{len(filtered)} scenes shown</div>", unsafe_allow_html=True)
+
+        for scene in filtered:
+            is_key = scene.scene_id in vm.key_scenes
+            _render_scene_card(scene, is_key)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 4: AD ENGINE
+# ══════════════════════════════════════════════════════════════════════════════
+def page_ads():
+    st.markdown("""
+    <div class="page-header">
+        <span class="page-icon">📢</span>
+        <div>
+            <div class="page-title">Ad Engine</div>
+            <div class="page-subtitle">Contextual ad matching and placement optimisation</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not st.session_state.videos:
+        st.info("Process a video first.")
+        return
+
+    vm = _get_active_video()
+    if not vm:
+        return
+
+    ae = st.session_state.ad_engine
+
+    tab1, tab2, tab3 = st.tabs(["🎯 Placement Plan", "🔍 Scene Matching", "📦 Inventory"])
+
+    with tab1:
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            st.markdown("**Placement Configuration**")
+            c1, c2 = st.columns(2)
+            with c1:
+                placement_types = st.multiselect(
+                    "Placement types",
+                    ["pre-roll", "mid-roll", "post-roll"],
+                    default=["pre-roll", "mid-roll", "post-roll"],
+                )
+                min_safety_ads = st.slider("Min brand safety", 0.0, 1.0, 0.5, 0.05)
+            with c2:
+                st.markdown(f"""
+                <div style='font-size:0.78rem;color:#6B7280;line-height:1.8'>
+                    <div>⏱ Min gap between ads: <strong style='color:#E2E4EA'>3 min</strong></div>
+                    <div>📊 Max density: <strong style='color:#E2E4EA'>1 per 5 min</strong></div>
+                    <div>🎬 Available scenes: <strong style='color:#FFAA00'>{vm.scene_count}</strong></div>
+                    <div>⏱ Video duration: <strong style='color:#E2E4EA'>{vm.fmt_duration()}</strong></div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        if st.button("🚀 Generate Placement Plan", use_container_width=True):
+            with st.spinner("Optimising placements…"):
+                placements = ae.plan_placements(vm.scenes, vm.duration_ms, placement_types)
+                perf = ae.simulate_performance(placements)
+                st.session_state["_placements"] = placements
+                st.session_state["_perf"] = perf
+
+        if "_placements" in st.session_state and st.session_state["_placements"]:
+            placements = st.session_state["_placements"]
+            perf = st.session_state["_perf"]
+
+            # KPIs
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Placements", perf["total_placements"])
+            c2.metric("Est. Revenue", f"${perf['total_revenue_usd']:.2f}")
+            c3.metric("Est. Impressions", f"{perf['total_impressions']:,}")
+            c4.metric("Est. Clicks", f"{perf['estimated_clicks']:,}")
+            c5.metric("Avg CPM", f"${perf['avg_cpm']:.2f}")
+
+            # Timeline chart
+            p_df = pd.DataFrame([p.to_dict() for p in placements])
+            type_colors = {"pre-roll": "#FFAA00", "mid-roll": "#36D399", "post-roll": "#60A5FA"}
+
+            fig = go.Figure()
+            for p_type in p_df["placement_type"].unique():
+                sub = p_df[p_df["placement_type"] == p_type]
+                fig.add_trace(go.Scatter(
+                    x=sub["timestamp_ms"] / 1000,
+                    y=sub["relevance_score"],
+                    mode="markers+text",
+                    name=p_type,
+                    text=sub["brand"].str[:12],
+                    textposition="top center",
+                    marker=dict(
+                        size=sub["estimated_cpm"] * 2 + 10,
+                        color=type_colors.get(p_type, "#FFAA00"),
+                        opacity=0.85,
+                        symbol="circle",
+                    ),
+                    hovertemplate=(
+                        f"<b>%{{text}}</b><br>"
+                        f"Time: %{{x:.0f}}s<br>"
+                        f"Relevance: %{{y:.3f}}<br>"
+                        f"Type: {p_type}<extra></extra>"
+                    ),
+                ))
+            fig.update_layout(**PLOTLY_THEME, height=320,
+                              title=dict(text="Ad Placement Timeline (bubble size = CPM)",
+                                         font=dict(size=12, color="#E2E4EA")),
+                              xaxis_title="Time (seconds)", yaxis_title="Relevance Score",
+                              legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#9AA0B0")))
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Placements table
+            display_cols = ["timestamp_fmt", "placement_type", "ad_title", "brand",
+                            "relevance_score", "safety_score", "estimated_cpm"]
+            st.dataframe(
+                p_df[display_cols].rename(columns={
+                    "timestamp_fmt": "Time", "placement_type": "Type",
+                    "ad_title": "Ad", "brand": "Brand",
+                    "relevance_score": "Relevance", "safety_score": "Safety",
+                    "estimated_cpm": "CPM ($)",
+                }),
+                use_container_width=True, hide_index=True,
+            )
+
+    with tab2:
+        st.markdown("**Match ads to a specific scene**")
+        scene_options = [f"[{s.start_fmt}] {s.text[:50]}…" for s in vm.scenes]
+        sel_scene_idx = st.selectbox("Select scene", range(len(vm.scenes)),
+                                     format_func=lambda i: scene_options[i])
+        scene = vm.scenes[sel_scene_idx]
+
+        matches = ae.match_ads(scene, top_k=5)
+
+        if not matches:
+            st.warning("No eligible ads for this scene.")
+        else:
+            for ad, score_info in matches:
+                total = score_info["total"]
+                st.markdown(f"""
+                <div class="ad-card">
+                    <div style='display:flex;justify-content:space-between'>
+                        <div>
+                            <div style='font-weight:700;color:#E2E4EA'>{ad.title}</div>
+                            <div style='color:#6B7280;font-size:0.78rem'>{ad.brand} · ${ad.cpm_base:.0f} CPM base</div>
+                        </div>
+                        <div style='text-align:right'>
+                            <div style='font-family:"JetBrains Mono",monospace;color:#FFAA00;font-size:1.1rem;font-weight:700'>
+                                {total:.3f}
+                            </div>
+                            <div style='font-size:0.65rem;color:#6B7280'>match score</div>
+                        </div>
+                    </div>
+                    <p style='color:#9AA0B0;font-size:0.8rem;margin:8px 0 6px'>{ad.description}</p>
+                    <div style='display:flex;gap:16px;font-size:0.72rem;font-family:"JetBrains Mono",monospace;color:#6B7280'>
+                        <span>content <strong style='color:#FFAA00'>{score_info['content_sim']:.3f}</strong></span>
+                        <span>IAB <strong style='color:#36D399'>{score_info['iab_match']:.3f}</strong></span>
+                        <span>safety <strong style='color:#60A5FA'>{score_info['safety']:.3f}</strong></span>
+                        <span>demo <strong style='color:#A78BFA'>{score_info['demographic']:.3f}</strong></span>
+                        <span>perf <strong style='color:#FB923C'>{score_info['performance']:.3f}</strong></span>
+                    </div>
+                    <div style='display:flex;gap:3px;margin-top:10px'>
+                        <div style='flex:{score_info["content_sim"]};background:#FFAA00;height:3px;border-radius:2px'></div>
+                        <div style='flex:{score_info["iab_match"]};background:#36D399;height:3px;border-radius:2px'></div>
+                        <div style='flex:{score_info["safety"]};background:#60A5FA;height:3px;border-radius:2px'></div>
+                        <div style='flex:{score_info["demographic"]};background:#A78BFA;height:3px;border-radius:2px'></div>
+                        <div style='flex:{score_info["performance"]};background:#FB923C;height:3px;border-radius:2px'></div>
+                    </div>
+                    <div style='font-size:0.6rem;color:#4B5563;margin-top:2px;display:flex;gap:8px'>
+                        <span style='color:#FFAA00'>■ content</span>
+                        <span style='color:#36D399'>■ IAB</span>
+                        <span style='color:#60A5FA'>■ safety</span>
+                        <span style='color:#A78BFA'>■ demo</span>
+                        <span style='color:#FB923C'>■ perf</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    with tab3:
+        st.markdown("**Ad Inventory**")
+        inv_data = [ad.to_dict() for ad in ae.inventory]
+        inv_df = pd.DataFrame(inv_data)
+        display = ["title", "brand", "cpm_base", "historical_ctr", "performance_score",
+                   "brand_safety_min", "budget_remaining"]
+        st.dataframe(
+            inv_df[display].rename(columns={
+                "title": "Ad", "brand": "Brand", "cpm_base": "Base CPM",
+                "historical_ctr": "CTR", "performance_score": "Perf Score",
+                "brand_safety_min": "Min Safety", "budget_remaining": "Budget Left",
+            }),
+            use_container_width=True, hide_index=True,
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 5: ANALYTICS
+# ══════════════════════════════════════════════════════════════════════════════
+def page_analytics():
+    st.markdown("""
+    <div class="page-header">
+        <span class="page-icon">📊</span>
+        <div>
+            <div class="page-title">Analytics Dashboard</div>
+            <div class="page-subtitle">Performance metrics and content intelligence insights</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not st.session_state.videos:
+        st.info("Process a video to see analytics.")
+        return
+
+    all_scenes = [s for vm in st.session_state.videos.values() for s in vm.scenes]
+
+    # Global KPIs
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total Videos", len(st.session_state.videos))
+    c2.metric("Total Scenes", len(all_scenes))
+    avg_eng = round(sum(s.engagement_score for s in all_scenes) / max(len(all_scenes), 1), 3)
+    c3.metric("Avg Engagement", avg_eng)
+    safe_pct = round(sum(1 for s in all_scenes if s.brand_safety.get("safety_score", 1.0) >= 0.8) / max(len(all_scenes), 1) * 100, 1)
+    c4.metric("Brand Safe Scenes", f"{safe_pct}%")
+    positive = round(sum(1 for s in all_scenes if s.sentiment.get("label") == "positive") / max(len(all_scenes), 1) * 100, 1)
+    c5.metric("Positive Sentiment", f"{positive}%")
+
+    st.divider()
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Sentiment distribution
+        labels = [s.sentiment.get("label", "neutral") for s in all_scenes]
+        label_counts = {l: labels.count(l) for l in set(labels)}
+        fig = px.pie(
+            values=list(label_counts.values()),
+            names=list(label_counts.keys()),
+            color_discrete_map={"positive": "#36D399", "neutral": "#6B7280", "negative": "#FF5252"},
+            hole=0.45,
+        )
+        fig.update_layout(**PLOTLY_THEME, height=280,
+                          title=dict(text="Sentiment Distribution", font=dict(size=12, color="#E2E4EA")),
+                          showlegend=True,
+                          legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#9AA0B0")))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        # IAB category heatmap
+        iab_all: dict[str, int] = {}
+        for s in all_scenes:
+            for cat in s.iab_categories[:1]:
+                iab_all[cat["name"]] = iab_all.get(cat["name"], 0) + 1
+        if iab_all:
+            top_iab = sorted(iab_all.items(), key=lambda x: x[1], reverse=True)[:10]
+            df_iab = pd.DataFrame(top_iab, columns=["Category", "Scenes"])
+            fig = px.bar(df_iab, x="Scenes", y="Category", orientation="h",
+                         color="Scenes", color_continuous_scale=["#1E1E2E", "#FFAA00"])
+            fig.update_layout(**PLOTLY_THEME, height=280,
+                              title=dict(text="Top Content Categories", font=dict(size=12, color="#E2E4EA")),
+                              yaxis=dict(autorange="reversed", **PLOTLY_THEME["yaxis"]),
+                              coloraxis_showscale=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+    col3, col4 = st.columns(2)
+
+    with col3:
+        # Engagement vs Safety scatter
+        eng_vals = [s.engagement_score for s in all_scenes]
+        safe_vals = [s.brand_safety.get("safety_score", 1.0) for s in all_scenes]
+        suit_vals = [s.ad_suitability for s in all_scenes]
+        vid_names = [
+            st.session_state.videos[s.video_id].title[:20]
+            if s.video_id in st.session_state.videos else s.video_id
+            for s in all_scenes
+        ]
+        fig = go.Figure(go.Scatter(
+            x=eng_vals, y=safe_vals,
+            mode="markers",
+            marker=dict(
+                size=[v * 15 + 5 for v in suit_vals],
+                color=suit_vals, colorscale="YlOrRd",
+                showscale=True, opacity=0.75,
+                colorbar=dict(title="Ad Suit.", tickfont=dict(color="#9AA0B0")),
+            ),
+            text=[f"{n}<br>ad suit: {v:.2f}" for n, v in zip(vid_names, suit_vals)],
+            hovertemplate="%{text}<br>eng: %{x:.2f}<br>safety: %{y:.2f}<extra></extra>",
+        ))
+        fig.update_layout(**PLOTLY_THEME, height=300,
+                          title=dict(text="Engagement vs Safety (bubble = ad suitability)",
+                                     font=dict(size=12, color="#E2E4EA")),
+                          xaxis_title="Engagement Score",
+                          yaxis_title="Brand Safety Score")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col4:
+        # Ad suitability distribution
+        fig = px.histogram(suit_vals, nbins=15,
+                           color_discrete_sequence=["#FF7700"])
+        fig.update_layout(**PLOTLY_THEME, height=300, showlegend=False,
+                          title=dict(text="Ad Suitability Distribution",
+                                     font=dict(size=12, color="#E2E4EA")),
+                          xaxis_title="Ad Suitability Score",
+                          yaxis_title="Scene Count")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Per-video breakdown table
+    st.divider()
+    st.markdown("**Video Breakdown**")
+    rows = []
+    for vm in st.session_state.videos.values():
+        if not vm.scenes:
+            continue
+        avg_e = round(sum(s.engagement_score for s in vm.scenes) / len(vm.scenes), 3)
+        avg_s = round(sum(s.brand_safety.get("safety_score", 1.0) for s in vm.scenes) / len(vm.scenes), 3)
+        rows.append({
+            "Title": vm.title[:40],
+            "Duration": vm.fmt_duration(),
+            "Scenes": vm.scene_count,
+            "Narrative": vm.narrative_structure.split("(")[0].strip(),
+            "Avg Engagement": avg_e,
+            "Avg Safety": f"{avg_s:.0%}",
+            "Top Category": vm.dominant_iab[0]["name"] if vm.dominant_iab else "—",
+        })
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 6: FRANCHISE INTEL
+# ══════════════════════════════════════════════════════════════════════════════
+def page_franchise():
+    st.markdown("""
+    <div class="page-header">
+        <span class="page-icon">🎯</span>
+        <div>
+            <div class="page-title">Franchise Intelligence</div>
+            <div class="page-subtitle">Cross-video theme tracking and recurring ad opportunities</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if len(st.session_state.videos) < 1:
+        st.info("Process at least one video to see franchise analysis.")
+        return
+
+    all_scenes = [s for vm in st.session_state.videos.values() for s in vm.scenes]
+    se = st.session_state.search_engine
+
+    # Theme frequency across all videos
+    theme_counts: dict[str, dict[str, int]] = {}
+    for vm in st.session_state.videos.values():
+        for theme in vm.franchise_themes:
+            if theme not in theme_counts:
+                theme_counts[theme] = {}
+            theme_counts[theme][vm.title[:25]] = theme_counts[theme].get(vm.title[:25], 0) + 1
+
+    if theme_counts:
+        st.markdown("**Recurring Themes Across Videos**")
+        theme_df_rows = []
+        for theme, vids in theme_counts.items():
+            for vid, cnt in vids.items():
+                theme_df_rows.append({"Theme": theme, "Video": vid, "Occurrences": cnt})
+        if theme_df_rows:
+            tdf = pd.DataFrame(theme_df_rows)
+            fig = px.bar(
+                tdf, x="Theme", y="Occurrences", color="Video",
+                color_discrete_sequence=PLOTLY_THEME["colorway"],
+            )
+            fig.update_layout(**PLOTLY_THEME, height=300,
+                              title=dict(text="Theme Frequency by Video",
+                                         font=dict(size=12, color="#E2E4EA")),
+                              xaxis_tickangle=-30, showlegend=True,
+                              legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#9AA0B0")))
+            st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # Cross-video ad opportunities
+    st.markdown("**Top Recurring Ad Opportunities**")
+    iab_opportunity: dict[str, list[dict]] = {}
+    for vm in st.session_state.videos.values():
+        for scene in vm.scenes:
+            if scene.ad_suitability > 0.6:
+                for cat in scene.iab_categories[:1]:
+                    cat_name = cat["name"]
+                    if cat_name not in iab_opportunity:
+                        iab_opportunity[cat_name] = []
+                    iab_opportunity[cat_name].append({
+                        "video": vm.title[:30],
+                        "scene_id": scene.scene_id,
+                        "ad_suitability": scene.ad_suitability,
+                        "engagement": scene.engagement_score,
+                    })
+
+    if iab_opportunity:
+        sorted_opps = sorted(iab_opportunity.items(),
+                             key=lambda x: sum(o["ad_suitability"] for o in x[1]),
+                             reverse=True)[:8]
+
+        for cat_name, scenes_list in sorted_opps[:4]:
+            avg_suit = round(sum(o["ad_suitability"] for o in scenes_list) / len(scenes_list), 3)
+            avg_eng  = round(sum(o["engagement"]     for o in scenes_list) / len(scenes_list), 3)
+            st.markdown(f"""
+            <div class="ad-card">
+                <div style='display:flex;justify-content:space-between;align-items:center'>
+                    <div>
+                        <span class='tag tag-amber'>{cat_name}</span>
+                        <span style='color:#6B7280;font-size:0.75rem;margin-left:10px'>{len(scenes_list)} scenes across {len(set(o["video"] for o in scenes_list))} video(s)</span>
+                    </div>
+                    <div style='font-family:"JetBrains Mono",monospace;text-align:right'>
+                        <span style='color:#FFAA00;font-size:0.9rem'>{avg_suit:.3f}</span>
+                        <span style='color:#4B5563;font-size:0.7rem'> avg suit</span>
+                        <span style='color:#36D399;font-size:0.9rem;margin-left:8px'>{avg_eng:.3f}</span>
+                        <span style='color:#4B5563;font-size:0.7rem'> avg eng</span>
+                    </div>
+                </div>
+                {_score_bar(avg_suit)}
+            </div>
+            """, unsafe_allow_html=True)
+
+    # Similar scenes across videos
+    if len(all_scenes) > 1 and se.stats["total_scenes"] > 0:
+        st.divider()
+        st.markdown("**Find Similar Scenes Across Videos**")
+        scene_opt = [f"[{s.video_id[:8]}] {s.start_fmt} — {s.text[:50]}…" for s in all_scenes[:50]]
+        sel = st.selectbox("Pick a scene", range(len(all_scenes[:50])),
+                           format_func=lambda i: scene_opt[i])
+        ref_scene = all_scenes[sel]
+        similar = se.find_similar_scenes(ref_scene, top_k=5, exclude_same_video=True)
+        if similar:
+            for r in similar:
+                vm2 = st.session_state.videos.get(r.scene.video_id)
+                st.markdown(f"""
+                <div class="search-result-card">
+                    <div style='display:flex;justify-content:space-between'>
+                        <span style='color:#6B7280;font-size:0.75rem'>{vm2.title[:30] if vm2 else r.scene.video_id}</span>
+                        <span style='font-family:"JetBrains Mono",monospace;color:#FFAA00;font-size:0.78rem'>sim: {r.score:.3f}</span>
+                    </div>
+                    <div style='color:#6B7280;font-size:0.7rem;margin:3px 0'>{r.scene.start_fmt}</div>
+                    <p style='color:#C4C9D8;font-size:0.83rem;margin:5px 0'>{r.scene.text[:200]}…</p>
+                    {_score_bar(r.score)}
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.info("No similar scenes found in other videos. Process more videos for cross-video analysis.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# UTILITIES
+# ══════════════════════════════════════════════════════════════════════════════
+def _get_active_video() -> Optional[VideoMetadata]:
+    if st.session_state.selected_video:
+        vm = st.session_state.videos.get(st.session_state.selected_video)
+        if vm:
+            return vm
+    # Fall back to first video
+    if st.session_state.videos:
+        return next(iter(st.session_state.videos.values()))
+    return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ROUTER
+# ══════════════════════════════════════════════════════════════════════════════
+PAGE_MAP = {
+    "process":   page_process,
+    "search":    page_search,
+    "scenes":    page_scenes,
+    "ads":       page_ads,
+    "analytics": page_analytics,
+    "franchise": page_franchise,
+}
+
+PAGE_MAP[st.session_state.page]()
