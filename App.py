@@ -682,7 +682,7 @@ def page_watch():
 
         with col_player:
             st.caption(f"**{vm.title}**  ·  {vm.fmt_duration()}  ·  {vm.scene_count} scenes")
-            _yt_embed(yt_id, start_sec)
+            _yt_embed(yt_id, 0)
             st.caption("💡 Click **▶ Play at** buttons on any scene to jump to that moment")
 
             # Mini stats under player
