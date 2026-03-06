@@ -264,7 +264,10 @@ _DEFAULTS = {
     "yt_api_key": "",
     "search_engine": None,
     "ad_engine": None,
-    "last_yt_id": None,       # for the embedded player
+    "last_yt_id": None,
+    "demo_video_b64": None,
+    "demo_video_type": None,
+    "demo_markers": [],
 }
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
@@ -298,6 +301,7 @@ NAV = [
     ("search",    "🔍", "Search Moments"),
     ("ads",       "📢", "Ad Matching"),
     ("analytics", "📊", "Analytics"),
+    ("demo",      "🎥", "Video Ad Demo"),
 ]
 
 with st.sidebar:
@@ -1260,6 +1264,587 @@ def page_analytics():
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE — VIDEO AD DEMO  (upload MP4, auto-detect scenes, inject sample ads)
+# ══════════════════════════════════════════════════════════════════════════════
+def page_demo():
+    import base64, json
+
+    st.markdown("## 🎥 Video Ad Demo")
+    st.caption("Upload any MP4 · the engine detects key moments · sample ads play at those moments")
+    st.divider()
+
+    tab_upload, tab_player = st.tabs(["📁  Upload & Configure", "▶️  Watch with Ads"])
+
+    # ── Sample ads library ─────────────────────────────────────────────────
+    SAMPLE_ADS = [
+        {"id": "ad1", "brand": "Nike",        "title": "Just Do It",
+         "color": "#f59e0b", "emoji": "👟",
+         "cta": "Shop Now",  "url": "https://nike.com",
+         "bg": "linear-gradient(135deg,#f59e0b,#d97706)",
+         "headline": "Push Your Limits",
+         "body": "New season collection — built for champions.",
+         "categories": ["Sports", "Fashion", "Health"]},
+        {"id": "ad2", "brand": "Spotify",     "title": "Music for Every Mood",
+         "color": "#1db954", "emoji": "🎵",
+         "cta": "Listen Free", "url": "https://spotify.com",
+         "bg": "linear-gradient(135deg,#1db954,#158a3e)",
+         "headline": "Soundtrack Your Life",
+         "body": "3 months Premium free — no ads, offline play.",
+         "categories": ["Entertainment", "Music", "Arts"]},
+        {"id": "ad3", "brand": "Amazon",      "title": "Deals of the Day",
+         "color": "#ff9900", "emoji": "📦",
+         "cta": "Shop Deals", "url": "https://amazon.com",
+         "bg": "linear-gradient(135deg,#ff9900,#e47911)",
+         "headline": "Today Only — Up to 60% Off",
+         "body": "Lightning deals on electronics, home & more.",
+         "categories": ["Shopping", "Technology", "Home"]},
+        {"id": "ad4", "brand": "Netflix",     "title": "Stories Worth Watching",
+         "color": "#e50914", "emoji": "🎬",
+         "cta": "Watch Now", "url": "https://netflix.com",
+         "bg": "linear-gradient(135deg,#e50914,#a30610)",
+         "headline": "New Episodes Every Week",
+         "body": "Award-winning series and films — start streaming today.",
+         "categories": ["Entertainment", "Arts", "Drama"]},
+        {"id": "ad5", "brand": "Duolingo",    "title": "Learn a Language",
+         "color": "#58cc02", "emoji": "🦜",
+         "cta": "Start Free",  "url": "https://duolingo.com",
+         "bg": "linear-gradient(135deg,#58cc02,#3d9900)",
+         "headline": "5 Minutes a Day Changes Everything",
+         "body": "40+ languages. Free forever. Used by 500M people.",
+         "categories": ["Education", "Language", "Personal Development"]},
+        {"id": "ad6", "brand": "Uber Eats",   "title": "Food at Your Door",
+         "color": "#06c167", "emoji": "🍔",
+         "cta": "Order Now",   "url": "https://ubereats.com",
+         "bg": "linear-gradient(135deg,#06c167,#038a47)",
+         "headline": "Craving Something?",
+         "body": "Your favourite restaurants delivered in 30 minutes.",
+         "categories": ["Food", "Delivery", "Lifestyle"]},
+    ]
+
+    # ── UPLOAD TAB ─────────────────────────────────────────────────────────
+    with tab_upload:
+        ca, cb = st.columns([3, 2], gap="large")
+        with ca:
+            st.markdown("#### 1. Upload your video")
+            video_file = st.file_uploader(
+                "Choose an MP4, MOV or WebM file (max 200MB)",
+                type=["mp4", "mov", "webm", "avi"],
+                key="demo_video_up"
+            )
+            if video_file:
+                st.success(f"✅ **{video_file.name}** ({video_file.size/1024/1024:.1f} MB)")
+
+            st.markdown("#### 2. Add ad markers")
+            st.caption("Specify timestamps where ads should appear (mid-roll), "
+                        "plus auto pre-roll and post-roll will be added.")
+
+            if "demo_markers" not in st.session_state or not isinstance(st.session_state.demo_markers, list):
+                st.session_state.demo_markers = []
+
+            # Add marker UI
+            mc1, mc2, mc3 = st.columns([2, 3, 1])
+            with mc1:
+                new_ts = st.text_input("Timestamp", placeholder="00:01:30 or 90",
+                                        key="new_marker_ts")
+            with mc2:
+                new_ad_name = st.selectbox("Ad to show", [a["brand"] + " — " + a["title"] for a in SAMPLE_ADS],
+                                            key="new_marker_ad")
+            with mc3:
+                st.write("")
+                st.write("")
+                if st.button("➕ Add", key="add_marker"):
+                    sec = _parse_ts(new_ts)
+                    if sec is not None:
+                        ad_idx = [a["brand"] + " — " + a["title"] for a in SAMPLE_ADS].index(new_ad_name)
+                        marker = {"sec": sec, "ad": SAMPLE_ADS[ad_idx],
+                                  "fmt": f"{sec//3600:02d}:{(sec%3600)//60:02d}:{sec%60:02d}"}
+                        st.session_state.demo_markers.append(marker)
+                        st.rerun()
+                    else:
+                        st.error("Invalid timestamp")
+
+            # Show current markers
+            if st.session_state.demo_markers:
+                st.markdown("**Current markers:**")
+                for i, m in enumerate(st.session_state.demo_markers):
+                    mc1, mc2, mc3 = st.columns([1, 4, 1])
+                    mc1.markdown(f"`{m['fmt']}`")
+                    mc2.markdown(f"{m['ad']['emoji']} **{m['ad']['brand']}** — {m['ad']['title']}")
+                    if mc3.button("🗑", key=f"del_m_{i}"):
+                        st.session_state.demo_markers.pop(i)
+                        st.rerun()
+
+        with cb:
+            st.markdown("#### Ad library")
+            for ad in SAMPLE_ADS:
+                with st.container(border=True):
+                    c1, c2 = st.columns([1, 4])
+                    c1.markdown(f"<div style='font-size:2rem;text-align:center'>{ad['emoji']}</div>",
+                                unsafe_allow_html=True)
+                    with c2:
+                        st.markdown(f"**{ad['brand']}** — {ad['title']}")
+                        st.caption(" · ".join(ad["categories"][:2]))
+
+        st.divider()
+        st.markdown("#### 3. Generate ad plan from AI scene analysis")
+        st.caption("If you've already processed this video via Load Video, "
+                   "the AI will suggest additional markers at key engagement moments.")
+
+        vm = _active_vm()
+        if vm and vm.scenes:
+            if st.button("⚡ Auto-suggest markers from scene analysis", key="auto_markers"):
+                ae = st.session_state.ad_engine
+                # Pick top 3 scenes by ad suitability for mid-roll
+                top_scenes = sorted(vm.scenes, key=lambda s: s.ad_suitability, reverse=True)[:4]
+                added = 0
+                for scene in top_scenes:
+                    matches = ae.match_ads(scene, top_k=1)
+                    if matches:
+                        best_ad_obj, score = matches[0]
+                        # Find matching sample ad by category overlap
+                        iab_names = [c["name"] for c in scene.iab_categories[:2]]
+                        chosen_ad = SAMPLE_ADS[0]  # default
+                        for samp in SAMPLE_ADS:
+                            if any(cat in " ".join(iab_names) for cat in samp["categories"]):
+                                chosen_ad = samp
+                                break
+                        sec = scene.start_sec
+                        fmt = f"{sec//3600:02d}:{(sec%3600)//60:02d}:{sec%60:02d}"
+                        # Avoid duplicates
+                        existing = [m["sec"] for m in st.session_state.demo_markers]
+                        if sec not in existing:
+                            st.session_state.demo_markers.append(
+                                {"sec": sec, "ad": chosen_ad, "fmt": fmt,
+                                 "scene_text": scene.text[:80], "score": score.get("total", 0)})
+                            added += 1
+                st.success(f"Added {added} markers from top ad-suitable scenes")
+                st.rerun()
+        else:
+            st.info("Process a video on the **Load Video** page first to enable AI-suggested markers.")
+
+        # Save video to session state
+        if video_file and st.button("✅ Save & Go to Player", key="save_demo", type="primary"):
+            raw = video_file.read()
+            b64 = base64.b64encode(raw).decode()
+            st.session_state.demo_video_b64 = b64
+            ext = video_file.name.split(".")[-1].lower()
+            mime_map = {"mp4": "video/mp4", "mov": "video/mp4",
+                        "webm": "video/webm", "avi": "video/x-msvideo"}
+            st.session_state.demo_video_type = mime_map.get(ext, "video/mp4")
+            st.session_state.page = "demo"
+            # Switch to player tab by setting a flag
+            st.session_state["demo_show_player"] = True
+            st.rerun()
+
+    # ── PLAYER TAB ─────────────────────────────────────────────────────────
+    with tab_player:
+        if not st.session_state.get("demo_video_b64"):
+            st.info("Upload a video in the **Upload & Configure** tab first.")
+            return
+
+        markers = st.session_state.demo_markers
+        video_b64 = st.session_state.demo_video_b64
+        video_type = st.session_state.demo_video_type
+
+        # Add pre-roll and post-roll to the markers list for the player
+        all_markers = []
+        # Pre-roll at t=0
+        all_markers.append({"sec": 0, "ad": SAMPLE_ADS[0], "type": "pre-roll"})
+        # Mid-roll markers from user
+        for m in sorted(markers, key=lambda x: x["sec"]):
+            all_markers.append({**m, "type": "mid-roll"})
+        # Post-roll handled by JS at video end
+
+        markers_json = json.dumps([{
+            "sec": m["sec"],
+            "type": m.get("type", "mid-roll"),
+            "ad_id": m["ad"]["id"],
+            "ad_brand": m["ad"]["brand"],
+            "ad_title": m["ad"]["title"],
+            "ad_headline": m["ad"]["headline"],
+            "ad_body": m["ad"]["body"],
+            "ad_cta": m["ad"]["cta"],
+            "ad_emoji": m["ad"]["emoji"],
+            "ad_bg": m["ad"]["bg"],
+            "ad_color": m["ad"]["color"],
+        } for m in all_markers])
+
+        post_roll_ad = SAMPLE_ADS[3]  # Netflix for post-roll
+
+        html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+* {{ box-sizing: border-box; margin: 0; padding: 0; font-family: Inter, sans-serif; }}
+body {{ background: #f9fafb; padding: 0; }}
+
+#player-wrap {{
+  position: relative; background: #000;
+  border-radius: 12px; overflow: hidden;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+}}
+#main-video {{
+  width: 100%; display: block; max-height: 460px; background: #000;
+}}
+
+/* ── Ad overlay ── */
+#ad-overlay {{
+  display: none;
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  z-index: 20;
+  align-items: center; justify-content: center;
+  flex-direction: column;
+}}
+#ad-card {{
+  width: 90%; max-width: 500px; border-radius: 16px;
+  padding: 28px 32px; color: #fff; text-align: center;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+  position: relative;
+}}
+#ad-emoji {{ font-size: 3rem; margin-bottom: 8px; }}
+#ad-brand {{ font-size: 12px; font-weight: 700; text-transform: uppercase;
+              letter-spacing: 0.12em; opacity: 0.8; margin-bottom: 4px; }}
+#ad-headline {{ font-size: 22px; font-weight: 700; margin-bottom: 8px; }}
+#ad-body {{ font-size: 14px; opacity: 0.9; margin-bottom: 20px; line-height: 1.5; }}
+#ad-cta {{
+  display: inline-block; background: rgba(255,255,255,0.2);
+  border: 2px solid rgba(255,255,255,0.6);
+  color: #fff; padding: 10px 28px; border-radius: 30px;
+  font-weight: 700; font-size: 14px; cursor: pointer;
+  transition: background 0.2s;
+}}
+#ad-cta:hover {{ background: rgba(255,255,255,0.35); }}
+#ad-skip {{
+  position: absolute; bottom: 14px; right: 16px;
+  font-size: 12px; opacity: 0.7; cursor: pointer;
+  background: rgba(0,0,0,0.3); padding: 4px 10px;
+  border-radius: 12px; color: #fff;
+}}
+#ad-skip:hover {{ opacity: 1; }}
+#ad-countdown {{
+  position: absolute; top: 14px; right: 16px;
+  font-size: 12px; background: rgba(0,0,0,0.4);
+  color: #fff; padding: 4px 10px; border-radius: 12px;
+}}
+#ad-type-badge {{
+  position: absolute; top: 14px; left: 16px;
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.1em; background: rgba(0,0,0,0.4);
+  color: #fff; padding: 4px 10px; border-radius: 12px;
+}}
+
+/* ── Timeline ── */
+#timeline-wrap {{
+  background: #fff; padding: 12px 16px; border-top: 1px solid #e5e7eb;
+}}
+#tl-bar-wrap {{
+  position: relative; height: 6px; background: #e5e7eb;
+  border-radius: 4px; margin-bottom: 8px; cursor: pointer;
+}}
+#tl-progress {{
+  height: 100%; background: #f59e0b; border-radius: 4px;
+  width: 0%; transition: width 0.3s linear;
+}}
+.tl-marker {{
+  position: absolute; top: -4px; width: 14px; height: 14px;
+  background: #ef4444; border: 2px solid #fff;
+  border-radius: 50%; transform: translateX(-50%);
+  cursor: pointer; z-index: 5; transition: transform 0.15s;
+}}
+.tl-marker:hover {{ transform: translateX(-50%) scale(1.4); }}
+.tl-marker-label {{
+  position: absolute; top: 18px; transform: translateX(-50%);
+  font-size: 9px; color: #6b7280; white-space: nowrap; font-weight: 600;
+}}
+
+/* ── Controls ── */
+#controls {{
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 0 4px;
+}}
+#play-btn {{
+  width: 36px; height: 36px; border-radius: 50%;
+  background: #f59e0b; border: none; cursor: pointer;
+  font-size: 14px; color: #fff; display: flex;
+  align-items: center; justify-content: center;
+  box-shadow: 0 2px 6px rgba(245,158,11,0.3);
+}}
+#time-display {{ font-size: 13px; color: #374151; font-variant-numeric: tabular-nums; }}
+#vol-wrap {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
+#vol-wrap input {{ width: 70px; accent-color: #f59e0b; }}
+#vol-icon {{ font-size: 14px; cursor: pointer; }}
+
+/* ── Scene chips ── */
+#scene-chips {{
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 10px 16px 12px; background: #fff;
+  border-top: 1px solid #e5e7eb;
+}}
+.chip {{
+  padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 500;
+  cursor: pointer; border: 1px solid #e5e7eb; background: #f9fafb; color: #374151;
+  transition: all 0.15s;
+}}
+.chip:hover, .chip.active {{
+  background: #fff7ed; border-color: #f59e0b; color: #92400e;
+}}
+.chip.ad-chip {{
+  background: #fef3c7; border-color: #fcd34d; color: #92400e;
+}}
+
+#status-bar {{
+  padding: 6px 16px; font-size: 12px; color: #6b7280;
+  background: #f9fafb; border-top: 1px solid #f3f4f6;
+  border-radius: 0 0 12px 12px;
+}}
+</style>
+</head>
+<body>
+<div id="player-wrap">
+  <video id="main-video" preload="metadata">
+    <source src="data:{video_type};base64,{video_b64}" type="{video_type}">
+  </video>
+
+  <!-- Ad overlay -->
+  <div id="ad-overlay">
+    <div id="ad-card">
+      <div id="ad-type-badge">mid-roll</div>
+      <div id="ad-countdown">Skip in 5s</div>
+      <div id="ad-emoji">🎬</div>
+      <div id="ad-brand">Brand</div>
+      <div id="ad-headline">Headline</div>
+      <div id="ad-body">Body text</div>
+      <div id="ad-cta" onclick="skipAd()">Learn More</div>
+      <div id="ad-skip" onclick="skipAd()">Skip Ad ›</div>
+    </div>
+  </div>
+
+  <!-- Timeline -->
+  <div id="timeline-wrap">
+    <div id="tl-bar-wrap" id="tl-bar" onclick="seekFromBar(event)">
+      <div id="tl-progress"></div>
+      <!-- markers injected by JS -->
+    </div>
+    <div id="controls">
+      <button id="play-btn" onclick="togglePlay()">▶</button>
+      <span id="time-display">0:00 / 0:00</span>
+      <div id="vol-wrap">
+        <span id="vol-icon" onclick="toggleMute()">🔊</span>
+        <input type="range" id="vol-slider" min="0" max="1" step="0.05" value="1"
+               oninput="setVol(this.value)">
+      </div>
+    </div>
+  </div>
+
+  <!-- Scene chips -->
+  <div id="scene-chips">
+    <span style="font-size:12px;color:#9ca3af;margin-right:4px;line-height:2">Jump to:</span>
+    <!-- injected by JS -->
+  </div>
+
+  <div id="status-bar">Ready — press play</div>
+</div>
+
+<script>
+var VIDEO = document.getElementById('main-video');
+var MARKERS = {markers_json};
+var POST_ROLL = {{
+  sec: -1, type: "post-roll",
+  ad_id: "post", ad_brand: "{post_roll_ad["brand"]}",
+  ad_title: "{post_roll_ad["title"]}",
+  ad_headline: "{post_roll_ad["headline"]}",
+  ad_body: "{post_roll_ad["body"]}",
+  ad_cta: "{post_roll_ad["cta"]}",
+  ad_emoji: "{post_roll_ad["emoji"]}",
+  ad_bg: "{post_roll_ad["bg"]}",
+  ad_color: "{post_roll_ad["color"]}",
+}};
+
+var shownMarkers = {{}};
+var adCountdown = null;
+var skipAfter = 5;
+var currentAd = null;
+var videoEnded = false;
+
+// ── Build timeline markers ──
+VIDEO.addEventListener('loadedmetadata', function() {{
+  var dur = VIDEO.duration;
+  var barWrap = document.getElementById('tl-bar-wrap');
+  MARKERS.forEach(function(m) {{
+    if (m.sec <= 0) return;  // skip pre-roll marker
+    var pct = (m.sec / dur) * 100;
+    var dot = document.createElement('div');
+    dot.className = 'tl-marker';
+    dot.style.left = pct + '%';
+    dot.title = m.ad_brand + ' at ' + fmtTime(m.sec);
+    dot.onclick = function(e) {{ e.stopPropagation(); VIDEO.currentTime = m.sec; }};
+    var lbl = document.createElement('div');
+    lbl.className = 'tl-marker-label';
+    lbl.style.left = pct + '%';
+    lbl.textContent = '📢 ' + fmtTime(m.sec);
+    barWrap.appendChild(dot);
+    barWrap.appendChild(lbl);
+  }});
+  // Build scene chips from markers
+  var chips = document.getElementById('scene-chips');
+  MARKERS.forEach(function(m) {{
+    var chip = document.createElement('span');
+    chip.className = 'chip ad-chip';
+    chip.textContent = m.ad_emoji + ' ' + m.ad_brand + ' @ ' + (m.sec > 0 ? fmtTime(m.sec) : 'start');
+    chip.onclick = function() {{
+      if (m.sec > 0) VIDEO.currentTime = m.sec - 1;
+      VIDEO.play();
+    }};
+    chips.appendChild(chip);
+  }});
+  updateStatus('Video ready · ' + MARKERS.length + ' ad markers · Press play');
+}});
+
+// ── Timeupdate: check for markers ──
+VIDEO.addEventListener('timeupdate', function() {{
+  var t = VIDEO.currentTime;
+  var dur = VIDEO.duration || 1;
+  document.getElementById('tl-progress').style.width = (t/dur*100) + '%';
+  document.getElementById('time-display').textContent = fmtTime(t) + ' / ' + fmtTime(dur);
+  document.getElementById('play-btn').textContent = VIDEO.paused ? '▶' : '⏸';
+
+  // Check markers
+  MARKERS.forEach(function(m) {{
+    if (!shownMarkers[m.ad_id + '_' + m.sec] && t >= m.sec && m.sec >= 0) {{
+      shownMarkers[m.ad_id + '_' + m.sec] = true;
+      showAd(m);
+    }}
+  }});
+}});
+
+// ── Post-roll ──
+VIDEO.addEventListener('ended', function() {{
+  if (!videoEnded) {{
+    videoEnded = true;
+    showAd(POST_ROLL);
+  }}
+}});
+
+// ── Show ad overlay ──
+function showAd(m) {{
+  VIDEO.pause();
+  currentAd = m;
+  var ov = document.getElementById('ad-overlay');
+  document.getElementById('ad-card').style.background = m.ad_bg;
+  document.getElementById('ad-type-badge').textContent = m.type || 'mid-roll';
+  document.getElementById('ad-emoji').textContent = m.ad_emoji;
+  document.getElementById('ad-brand').textContent = m.ad_brand;
+  document.getElementById('ad-headline').textContent = m.ad_headline;
+  document.getElementById('ad-body').textContent = m.ad_body;
+  document.getElementById('ad-cta').textContent = m.ad_cta;
+  ov.style.display = 'flex';
+  updateStatus('📢 Ad playing: ' + m.ad_brand + ' — ' + m.ad_title);
+
+  // Countdown
+  var secs = skipAfter;
+  document.getElementById('ad-countdown').textContent = 'Skip in ' + secs + 's';
+  adCountdown = setInterval(function() {{
+    secs--;
+    if (secs <= 0) {{
+      document.getElementById('ad-countdown').textContent = 'Skip Ad ›';
+      document.getElementById('ad-skip').style.display = 'block';
+      clearInterval(adCountdown);
+    }} else {{
+      document.getElementById('ad-countdown').textContent = 'Skip in ' + secs + 's';
+    }}
+  }}, 1000);
+}}
+
+function skipAd() {{
+  clearInterval(adCountdown);
+  document.getElementById('ad-overlay').style.display = 'none';
+  currentAd = null;
+  if (!videoEnded) VIDEO.play();
+  updateStatus('Playing');
+}}
+
+function togglePlay() {{
+  if (VIDEO.paused) {{ VIDEO.play(); updateStatus('Playing'); }}
+  else {{ VIDEO.pause(); updateStatus('Paused'); }}
+}}
+
+function seekFromBar(e) {{
+  var bar = document.getElementById('tl-bar-wrap');
+  var rect = bar.getBoundingClientRect();
+  var pct = (e.clientX - rect.left) / rect.width;
+  VIDEO.currentTime = pct * (VIDEO.duration || 0);
+}}
+
+function setVol(v) {{ VIDEO.volume = v; }}
+function toggleMute() {{
+  VIDEO.muted = !VIDEO.muted;
+  document.getElementById('vol-icon').textContent = VIDEO.muted ? '🔇' : '🔊';
+}}
+function fmtTime(s) {{
+  s = Math.floor(s || 0);
+  var m = Math.floor(s/60); var ss = s%60;
+  return m + ':' + (ss < 10 ? '0' : '') + ss;
+}}
+function updateStatus(msg) {{
+  document.getElementById('status-bar').textContent = msg;
+}}
+
+// Trigger pre-roll immediately on first play
+VIDEO.addEventListener('play', function onFirstPlay() {{
+  if (!shownMarkers['pre-roll']) {{
+    shownMarkers['pre-roll'] = true;
+    var preRoll = MARKERS.find(function(m) {{ return m.sec === 0; }});
+    if (preRoll) {{
+      VIDEO.pause();
+      showAd(preRoll);
+    }}
+  }}
+  VIDEO.removeEventListener('play', onFirstPlay);
+}}, {{once: true}});
+</script>
+</body>
+</html>"""
+
+        # Show marker summary above player
+        if all_markers:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Ad Markers", len(all_markers))
+            c2.metric("Pre-roll", "1")
+            c3.metric("Mid-roll", len([m for m in markers]))
+
+        st.components.v1.html(html, height=640, scrolling=False)
+
+        st.divider()
+        if all_markers:
+            st.caption("**AD SCHEDULE**")
+            rows = []
+            for m in all_markers:
+                rows.append({
+                    "Type": m.get("type", "mid-roll"),
+                    "Timestamp": "Pre-roll (0s)" if m["sec"] == 0 else f"{m['fmt'] if 'fmt' in m else fmtTime_py(m['sec'])}",
+                    "Brand": m["ad"]["brand"],
+                    "Ad": m["ad"]["title"],
+                    "CTA": m["ad"]["cta"],
+                })
+            rows.append({
+                "Type": "post-roll",
+                "Timestamp": "End of video",
+                "Brand": post_roll_ad["brand"],
+                "Ad": post_roll_ad["title"],
+                "CTA": post_roll_ad["cta"],
+            })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def fmtTime_py(s):
+    s = int(s or 0)
+    return f"{s//60}:{s%60:02d}"
+
+
 # ── Router ─────────────────────────────────────────────────────────────────────
 pages = {
     "process":   page_process,
@@ -1267,5 +1852,6 @@ pages = {
     "search":    page_search,
     "ads":       page_ads,
     "analytics": page_analytics,
+    "demo":      page_demo,
 }
 pages.get(st.session_state.page, page_process)()
