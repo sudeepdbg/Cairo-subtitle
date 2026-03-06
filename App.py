@@ -324,7 +324,7 @@ with st.sidebar:
         labels = [vm.title[:28] + ("…" if len(vm.title) > 28 else "") for vm in vms]
         sel_idx = st.selectbox("Active video", range(len(vms)),
                                format_func=lambda i: labels[i],
-                               key="vm_sel", label_visibility="collapsed")
+                               key="vm_sel")
         st.session_state.selected_video = vms[sel_idx].video_id
 
         se = st.session_state.search_engine.stats
@@ -336,7 +336,7 @@ with st.sidebar:
     yt = st.text_input("YouTube API Key", type="password",
                         value=st.session_state.yt_api_key,
                         placeholder="Optional",
-                        key="yt_key_in", label_visibility="visible")
+                        key="yt_key_in")
     if yt != st.session_state.yt_api_key:
         st.session_state.yt_api_key = yt
 
@@ -456,125 +456,143 @@ def page_process():
         "▶️  YouTube URL", "📁  Upload SRT/VTT", "📋  Paste Text"
     ])
 
-    # ── YouTube tab (primary, shown first) ────────────────────────────────
+    # ── YouTube tab ────────────────────────────────────────────────────────
     with tab_yt:
         st.markdown("#### Paste a YouTube URL")
-        yt_url = st.text_input("", placeholder="https://youtube.com/watch?v=...",
-                               key="yt_url_in", label_visibility="collapsed")
+        yt_url = st.text_input("YouTube URL or Video ID",
+                               placeholder="https://youtube.com/watch?v=...",
+                               key="yt_url_in")
 
-        ca, cb = st.columns([2, 3])
+        ca, cb = st.columns([2, 3], gap="large")
         with ca:
-            st.caption("SCENE DETECTION")
-            min_s = st.slider("Min scene length", 10, 90, 20, 5, key="yt_min",
-                              help="Minimum seconds per scene")
-            max_s = st.slider("Max scene length", 60, 300, 120, 10, key="yt_max")
-            sens = st.slider("Sensitivity", 0.2, 0.7, 0.35, 0.05, key="yt_sens",
-                             help="Higher = fewer, larger scenes")
-
+            st.markdown("**Scene Detection Settings**")
+            min_s = st.slider("Min scene length (seconds)", 10, 90, 20, 5, key="yt_min")
+            max_s = st.slider("Max scene length (seconds)", 60, 300, 120, 10, key="yt_max")
+            sens  = st.slider("Sensitivity", 0.2, 0.7, 0.35, 0.05, key="yt_sens",
+                              help="Higher = fewer but bigger scenes")
         with cb:
             if yt_url:
                 vid_id = _yt_id(yt_url)
                 if vid_id:
-                    st.caption("PREVIEW")
+                    st.markdown("**Video Preview**")
                     _yt_embed(vid_id)
                 else:
-                    st.warning("Couldn't parse a video ID from that URL.")
+                    st.warning("Could not parse a video ID from that URL.")
 
-        if yt_url and st.button("⚡ Analyse This Video", key="proc_yt"):
-            vid_id = _yt_id(yt_url)
-            if not vid_id:
-                st.error("Invalid URL.")
-                return
-            with st.spinner("Fetching transcript from YouTube…"):
-                transcript = fetch_youtube_transcript(vid_id)
-            if transcript is None:
-                st.error("No captions found. Try a video with auto-generated subtitles enabled.")
-                return
-            meta = None
-            if st.session_state.yt_api_key:
-                with st.spinner("Fetching video metadata…"):
-                    meta = fetch_youtube_metadata(vid_id, st.session_state.yt_api_key)
-            title = meta.get("title", f"YouTube · {vid_id}") if meta else f"YouTube · {vid_id}"
-            with st.spinner(f'Detecting scenes in "{title}"…'):
-                t0 = time.time()
-                vm = VideoProcessor(min_s, max_s, sens).process_youtube_transcript(
-                    transcript, vid_id, title, meta)
-                elapsed = time.time() - t0
-            _register(vm)
-            st.session_state.last_yt_id = vid_id
-            st.success(f"✅  Found **{len(vm.scenes)} scenes** in {elapsed:.1f}s")
-            _summary_strip(vm)
-            st.info("👉  Go to **Watch & Explore** to play the video alongside every scene.")
+        if yt_url:
+            if st.button("⚡ Analyse This Video", key="proc_yt", type="primary"):
+                vid_id = _yt_id(yt_url)
+                if not vid_id:
+                    st.error("Invalid URL — please paste a full YouTube link.")
+                    st.stop()
+                with st.spinner("Fetching transcript from YouTube…"):
+                    transcript = fetch_youtube_transcript(vid_id)
+                if transcript is None:
+                    st.error("No captions found. Try a video with auto-generated subtitles enabled.")
+                    st.stop()
+                meta = None
+                if st.session_state.yt_api_key:
+                    with st.spinner("Fetching video metadata…"):
+                        meta = fetch_youtube_metadata(vid_id, st.session_state.yt_api_key)
+                title = meta.get("title", f"YouTube · {vid_id}") if meta else f"YouTube · {vid_id}"
+                with st.spinner(f"Detecting scenes…"):
+                    t0 = time.time()
+                    vm = VideoProcessor(min_s, max_s, sens).process_youtube_transcript(
+                        transcript, vid_id, title, meta)
+                    elapsed = time.time() - t0
+                _register(vm)
+                st.session_state.last_yt_id = vid_id
+                vm.yt_id = vid_id
+                st.success(f"✅  Found **{len(vm.scenes)} scenes** in {elapsed:.1f}s")
+                _summary_strip(vm)
+                st.info("👉  Click **Watch & Explore** in the sidebar to play the video and explore scenes.")
 
-    # ── Upload tab ─────────────────────────────────────────────────────────
+    # ── Upload SRT/VTT tab ─────────────────────────────────────────────────
     with tab_file:
-        st.markdown("#### Upload a subtitle file")
-        st.caption("Supported: .srt (SubRip) and .vtt (WebVTT)")
+        st.markdown("#### Upload a subtitle file (.srt or .vtt)")
+
         ca, cb = st.columns([3, 2], gap="large")
         with ca:
-            uploaded = st.file_uploader("Drop your subtitle file here", type=["srt", "vtt"],
-                                         key="up_file")
-            title_f = st.text_input("Video title", placeholder="Leave blank to use filename",
+            uploaded = st.file_uploader(
+                "Choose your subtitle file",
+                type=["srt", "vtt"],
+                key="up_file",
+                help="SubRip (.srt) or WebVTT (.vtt) format"
+            )
+            title_f = st.text_input("Video title (optional)",
+                                    placeholder="Leave blank to use filename",
                                     key="up_title")
-            yt_link = st.text_input("YouTube URL (optional — to enable the player)",
-                                    placeholder="https://youtube.com/watch?v=...",
-                                    key="up_yt")
+            yt_link = st.text_input(
+                "YouTube URL (optional — enables the video player)",
+                placeholder="https://youtube.com/watch?v=...",
+                key="up_yt"
+            )
         with cb:
-            st.caption("DETECTION SETTINGS")
-            min_f = st.slider("Min scene (s)", 10, 90, 20, 5, key="f_min")
-            max_f = st.slider("Max scene (s)", 60, 300, 120, 10, key="f_max")
+            st.markdown("**Scene Detection Settings**")
+            min_f = st.slider("Min scene length (seconds)", 10, 90, 20, 5, key="f_min")
+            max_f = st.slider("Max scene length (seconds)", 60, 300, 120, 10, key="f_max")
             sens_f = st.slider("Sensitivity", 0.2, 0.7, 0.35, 0.05, key="f_sens")
 
-        if uploaded and st.button("⚡ Process File", key="proc_file"):
-            content = uploaded.read().decode("utf-8", errors="replace")
-            fmt = "vtt" if uploaded.name.lower().endswith(".vtt") else "srt"
-            title = title_f or uploaded.name
-            with st.spinner("Analysing scenes…"):
-                t0 = time.time()
-                vm = VideoProcessor(min_f, max_f, sens_f).process_file(content, title, fmt)
-                elapsed = time.time() - t0
-            if not vm.scenes:
-                st.error("No scenes detected — check file format.")
-                return
-            _register(vm)
-            if yt_link:
-                vid_id = _yt_id(yt_link)
-                if vid_id:
-                    st.session_state.last_yt_id = vid_id
-                    # Store yt_id against this video
-                    vm.yt_id = vid_id
-            st.success(f"✅  **{len(vm.scenes)} scenes** detected in {elapsed:.1f}s")
-            _summary_strip(vm)
+        if uploaded is not None:
+            st.success(f"File ready: **{uploaded.name}** ({uploaded.size:,} bytes)")
+            if st.button("⚡ Process File", key="proc_file", type="primary"):
+                content_text = uploaded.read().decode("utf-8", errors="replace")
+                fmt = "vtt" if uploaded.name.lower().endswith(".vtt") else "srt"
+                title = title_f.strip() or uploaded.name
+                with st.spinner("Analysing scenes…"):
+                    t0 = time.time()
+                    vm = VideoProcessor(min_f, max_f, sens_f).process_file(content_text, title, fmt)
+                    elapsed = time.time() - t0
+                if not vm.scenes:
+                    st.error("No scenes detected — check that the file is a valid SRT/VTT.")
+                    st.stop()
+                _register(vm)
+                if yt_link.strip():
+                    vid_id = _yt_id(yt_link.strip())
+                    if vid_id:
+                        st.session_state.last_yt_id = vid_id
+                        vm.yt_id = vid_id
+                st.success(f"✅  **{len(vm.scenes)} scenes** detected in {elapsed:.1f}s")
+                _summary_strip(vm)
+        else:
+            st.info("👆 Choose a .srt or .vtt file to get started")
 
-    # ── Paste tab ──────────────────────────────────────────────────────────
+    # ── Paste Text tab ─────────────────────────────────────────────────────
     with tab_text:
-        st.markdown("#### Paste subtitle content")
+        st.markdown("#### Paste subtitle content directly")
+
         ca, cb = st.columns([3, 2], gap="large")
         with ca:
-            title_p = st.text_input("Title", placeholder="My Video", key="p_title")
-            pasted = st.text_area("", height=220,
-                                  placeholder="1\n00:00:01,000 --> 00:00:05,000\nHello world...",
-                                  key="p_text", label_visibility="collapsed")
+            title_p = st.text_input("Video title", placeholder="My Video", key="p_title")
+            pasted = st.text_area(
+                "Paste SRT or VTT content here",
+                height=220,
+                placeholder="1\n00:00:01,000 --> 00:00:05,000\nHello world...\n\n2\n00:00:06,000 --> 00:00:10,000\nNext line here...",
+                key="p_text"
+            )
         with cb:
-            st.caption("DETECTION SETTINGS")
-            min_p = st.slider("Min scene (s)", 10, 90, 20, 5, key="p_min")
-            max_p = st.slider("Max scene (s)", 60, 300, 120, 10, key="p_max")
+            st.markdown("**Scene Detection Settings**")
+            min_p = st.slider("Min scene length (seconds)", 10, 90, 20, 5, key="p_min")
+            max_p = st.slider("Max scene length (seconds)", 60, 300, 120, 10, key="p_max")
 
-        if pasted and st.button("⚡ Process Text", key="proc_paste"):
-            with st.spinner("Processing…"):
-                t0 = time.time()
-                vm = VideoProcessor(min_p, max_p).process_file(pasted, title_p or "Pasted Video")
-                elapsed = time.time() - t0
-            if not vm.scenes:
-                st.error("No scenes found — check format.")
-                return
-            _register(vm)
-            st.success(f"✅  **{len(vm.scenes)} scenes** in {elapsed:.1f}s")
-            _summary_strip(vm)
+        if pasted.strip():
+            if st.button("⚡ Process Text", key="proc_paste", type="primary"):
+                with st.spinner("Processing…"):
+                    t0 = time.time()
+                    vm = VideoProcessor(min_p, max_p).process_file(
+                        pasted, title_p.strip() or "Pasted Video")
+                    elapsed = time.time() - t0
+                if not vm.scenes:
+                    st.error("No scenes found — check that the content is valid SRT/VTT format.")
+                    st.stop()
+                _register(vm)
+                st.success(f"✅  **{len(vm.scenes)} scenes** in {elapsed:.1f}s")
+                _summary_strip(vm)
+        else:
+            st.info("👆 Paste subtitle content above to get started")
 
 
 def _summary_strip(vm: VideoMetadata):
-    """4-metric strip shown after processing."""
     st.divider()
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Scenes", vm.scene_count)
@@ -646,11 +664,11 @@ def page_watch():
                 sent_filter = st.multiselect("Sentiment",
                     ["positive", "neutral", "negative"],
                     default=["positive", "neutral", "negative"],
-                    key="w_sent", label_visibility="collapsed",
+                    key="w_sent",
                     placeholder="Sentiment…")
             with fc2:
                 min_suit = st.slider("Min ad fit", 0.0, 1.0, 0.0, 0.1,
-                                     key="w_suit", label_visibility="collapsed")
+                                     key="w_suit")
 
             filtered = [s for s in vm.scenes
                         if s.sentiment.get("label", "neutral") in sent_filter
@@ -681,10 +699,9 @@ def page_search():
         st.info("No videos indexed yet — load a video first.")
         return
 
-    mode = st.radio("", ["🧠 Describe what you're looking for",
+    mode = st.radio("Search mode", ["🧠 Describe what you're looking for",
                          "🏷️ Browse by tags", "⏱️ Jump to timestamp"],
-                    horizontal=True, key="search_mode",
-                    label_visibility="collapsed")
+                    horizontal=True, key="search_mode")
     st.divider()
 
     vm = _active_vm()
@@ -704,10 +721,9 @@ def _semantic_search(se, yt_id=None):
         st.session_state["sem_q_staged"] = ""
 
     default_val = st.session_state.pop("sem_q_staged", "")
-    query = st.text_input("",
+    query = st.text_input("What moment are you looking for?",
         placeholder="Try: 'tense confrontation'  /  'product demo'  /  'emotional speech'  /  'cricket six'",
-        key="sem_q", value=default_val,
-        label_visibility="collapsed")
+        key="sem_q", value=default_val)
 
     ca, cb, cc = st.columns([2, 1, 1])
     with ca:
@@ -715,7 +731,7 @@ def _semantic_search(se, yt_id=None):
     with cb:
         safety_th = st.selectbox("Brand safety",
             ["Any", "Moderate (50%+)", "Strict (80%+)"],
-            key="sem_safe", label_visibility="collapsed")
+            key="sem_safe")
         smap = {"Any": 0.0, "Moderate (50%+)": 0.5, "Strict (80%+)": 0.8}
     with cc:
         diversify = st.checkbox("Diversify", value=True, key="sem_div")
@@ -764,15 +780,15 @@ def _tag_search(yt_id=None):
         iab_sel = st.multiselect("Content category",
             [f"{k}: {v}" for k, v in list(_IAB_NAMES.items())[:30]],
             placeholder="Any category…", key="tag_iab",
-            label_visibility="visible")
+)
     with cb:
         sent_f = st.multiselect("Sentiment",
             ["positive", "neutral", "negative"],
             default=["positive", "neutral", "negative"],
-            key="tag_sent", label_visibility="visible")
+            key="tag_sent")
     with cc:
         min_fit = st.slider("Min ad fit", 0.0, 1.0, 0.0, 0.1,
-                            key="tag_fit", label_visibility="visible")
+                            key="tag_fit")
 
     kw = st.text_input("Keyword in text", placeholder="e.g. cricket  /  revenue  /  love",
                        key="tag_kw")
@@ -808,10 +824,10 @@ def _timestamp_jump(vm, yt_id=None):
     ca, cb = st.columns(2)
     with ca:
         ts_from = st.text_input("From", placeholder="00:01:30  or  90",
-                                key="ts_from", label_visibility="visible")
+                                key="ts_from")
     with cb:
         ts_to = st.text_input("To (optional)", placeholder="00:05:00  or  300",
-                              key="ts_to", label_visibility="visible")
+                              key="ts_to")
 
     start_s = _parse_ts(ts_from) if ts_from else None
     end_s = _parse_ts(ts_to) if ts_to else None
@@ -857,7 +873,7 @@ def page_ads():
         scene_opts = [f"{s.start_fmt} — {s.text[:65]}…" for s in vm.scenes]
         sel_idx = st.selectbox("Scene", range(len(vm.scenes)),
                                format_func=lambda i: scene_opts[i],
-                               key="ad_scene_sel", label_visibility="collapsed")
+                               key="ad_scene_sel")
         scene = vm.scenes[sel_idx]
 
         # Show the selected scene
