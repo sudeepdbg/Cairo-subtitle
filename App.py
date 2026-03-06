@@ -31,24 +31,39 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
+/* ══ LIGHT THEME ══ */
 html, body, [class*="css"] { font-family: 'Inter', sans-serif !important; }
 #MainMenu, footer { visibility: hidden; }
 
-/* ── App background: soft charcoal, not pure black ── */
-.stApp { background: #1a1c23 !important; }
-[data-testid="stAppViewContainer"] { background: #1a1c23 !important; }
-[data-testid="stMain"] { background: #1a1c23 !important; }
+/* Main background: clean white */
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
 [data-testid="block-container"] {
-    background: #1a1c23 !important;
-    padding: 1.5rem 2rem 3rem !important;
+    background: #ffffff !important;
+    color: #111827 !important;
+}
+[data-testid="block-container"] {
+    padding: 1.5rem 2.5rem 3rem !important;
     max-width: 1300px !important;
 }
 
-/* ── Sidebar: slightly lighter than main ── */
-[data-testid="stSidebar"] { background: #13151b !important; border-right: 1px solid #2a2d38 !important; }
-[data-testid="stSidebar"] > div:first-child { background: #13151b !important; }
+/* All text dark */
+p, span, label, div, h1, h2, h3, h4, li { color: #111827 !important; }
+.stMarkdown p, .stMarkdown span { color: #374151 !important; }
 
-/* ── Sidebar nav buttons ── */
+/* Sidebar: very light grey */
+[data-testid="stSidebar"],
+[data-testid="stSidebar"] > div:first-child {
+    background: #f8f9fa !important;
+    border-right: 1px solid #e5e7eb !important;
+}
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] div { color: #374151 !important; }
+
+/* Sidebar nav buttons */
 [data-testid="stSidebar"] .stButton > button {
     width: 100% !important;
     text-align: left !important;
@@ -56,50 +71,48 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif !important; }
     background: transparent !important;
     border: none !important;
     border-radius: 8px !important;
-    color: #9ca3af !important;
-    font-size: 0.88rem !important;
+    color: #6b7280 !important;
+    font-size: 0.875rem !important;
     font-weight: 500 !important;
     padding: 0.55rem 1rem !important;
     box-shadow: none !important;
-    transition: background 0.15s, color 0.15s !important;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
-    background: #1f222d !important;
-    color: #e5e7eb !important;
+    background: #f0f1f3 !important;
+    color: #111827 !important;
     transform: none !important;
     box-shadow: none !important;
 }
 [data-testid="stSidebar"] .stButton > button[kind="primary"] {
-    background: rgba(245,158,11,0.1) !important;
-    color: #f59e0b !important;
+    background: #fff7ed !important;
+    color: #d97706 !important;
     border-left: 3px solid #f59e0b !important;
     border-radius: 0 8px 8px 0 !important;
+    font-weight: 600 !important;
 }
 
-/* ── Main content buttons ── */
+/* Main action buttons */
 section.main .stButton > button,
 [data-testid="stMain"] .stButton > button {
     background: #f59e0b !important;
-    color: #111 !important;
+    color: #1a1a1a !important;
     border: none !important;
     border-radius: 8px !important;
     font-weight: 600 !important;
-    font-size: 0.88rem !important;
-    padding: 0.55rem 1.4rem !important;
-    box-shadow: 0 2px 8px rgba(245,158,11,0.25) !important;
-    transition: all 0.15s !important;
+    padding: 0.55rem 1.5rem !important;
+    box-shadow: 0 1px 4px rgba(245,158,11,0.3) !important;
 }
 section.main .stButton > button:hover,
 [data-testid="stMain"] .stButton > button:hover {
-    background: #fbbf24 !important;
-    box-shadow: 0 4px 16px rgba(245,158,11,0.35) !important;
+    background: #d97706 !important;
     transform: translateY(-1px) !important;
+    box-shadow: 0 4px 12px rgba(245,158,11,0.3) !important;
 }
 
-/* ── Tabs: pill style ── */
+/* Tabs */
 [data-testid="stTabs"] [data-baseweb="tab-list"] {
-    background: #20232d !important;
-    border: 1px solid #2e3140 !important;
+    background: #f3f4f6 !important;
+    border: 1px solid #e5e7eb !important;
     border-radius: 10px !important;
     padding: 4px !important;
     gap: 2px !important;
@@ -115,14 +128,14 @@ section.main .stButton > button:hover,
 }
 [data-testid="stTabs"] [aria-selected="true"] {
     background: #f59e0b !important;
-    color: #111 !important;
+    color: #1a1a1a !important;
     font-weight: 600 !important;
 }
 
-/* ── Metric cards ── */
+/* Metric cards */
 [data-testid="stMetric"] {
-    background: #20232d !important;
-    border: 1px solid #2e3140 !important;
+    background: #f9fafb !important;
+    border: 1px solid #e5e7eb !important;
     border-radius: 10px !important;
     padding: 1rem 1.2rem !important;
 }
@@ -131,94 +144,114 @@ section.main .stButton > button:hover,
     font-weight: 600 !important;
     letter-spacing: 0.06em !important;
     text-transform: uppercase !important;
-    color: #6b7280 !important;
+    color: #9ca3af !important;
 }
 [data-testid="stMetricValue"] > div {
     font-size: 1.6rem !important;
-    font-weight: 600 !important;
-    color: #f0f2f5 !important;
+    font-weight: 700 !important;
+    color: #111827 !important;
 }
 
-/* ── Scene/content cards ── */
+/* Scene / content cards */
 [data-testid="stVerticalBlockBorderWrapper"] {
-    background: #20232d !important;
-    border: 1px solid #2e3140 !important;
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
     border-radius: 10px !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05) !important;
 }
 
-/* ── Inputs ── */
-input, textarea {
-    background: #20232d !important;
-    border: 1px solid #2e3140 !important;
+/* Inputs */
+input, textarea,
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea {
+    background: #ffffff !important;
+    border: 1.5px solid #d1d5db !important;
     border-radius: 8px !important;
-    color: #e5e7eb !important;
+    color: #111827 !important;
 }
-input:focus, textarea:focus { border-color: #f59e0b !important; outline: none !important; }
-input::placeholder, textarea::placeholder { color: #4b5563 !important; }
+input:focus, textarea:focus {
+    border-color: #f59e0b !important;
+    box-shadow: 0 0 0 3px rgba(245,158,11,0.15) !important;
+}
+input::placeholder, textarea::placeholder { color: #9ca3af !important; }
 
-/* ── Select / multiselect ── */
-[data-baseweb="select"] > div { background: #20232d !important; border-color: #2e3140 !important; }
-[data-baseweb="popover"], [data-baseweb="menu"] { background: #20232d !important; }
-[role="option"] { background: #20232d !important; color: #d1d5db !important; }
-[role="option"]:hover { background: #2a2d3a !important; }
+/* Select */
+[data-baseweb="select"] > div {
+    background: #ffffff !important;
+    border-color: #d1d5db !important;
+    color: #111827 !important;
+}
+[data-baseweb="popover"], [data-baseweb="menu"] {
+    background: #ffffff !important;
+    border: 1px solid #e5e7eb !important;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.1) !important;
+}
+[role="option"] { background: #ffffff !important; color: #111827 !important; }
+[role="option"]:hover { background: #f9fafb !important; }
 
-/* ── File uploader ── */
+/* File uploader */
 [data-testid="stFileUploaderDropzone"] {
-    background: #20232d !important;
-    border: 2px dashed #2e3140 !important;
+    background: #fafafa !important;
+    border: 2px dashed #d1d5db !important;
     border-radius: 10px !important;
 }
+[data-testid="stFileUploaderDropzone"] * { color: #6b7280 !important; }
+[data-testid="stFileUploaderDropzone"] button {
+    background: #ffffff !important;
+    border: 1px solid #d1d5db !important;
+    color: #374151 !important;
+    border-radius: 6px !important;
+}
 
-/* ── Progress bar ── */
+/* Progress bar */
 [data-testid="stProgress"] > div > div { background: #f59e0b !important; }
+[data-testid="stProgress"] > div { background: #f3f4f6 !important; }
 
-/* ── Alerts ── */
+/* Alerts */
 [data-testid="stAlert"] { border-radius: 8px !important; }
 
-/* ── Divider ── */
-hr { border-color: #2e3140 !important; }
+/* Divider */
+hr { border-color: #e5e7eb !important; }
 
-/* ── Plotly chart wrapper ── */
-[data-testid="stPlotlyChart"] { border-radius: 10px !important; overflow: hidden !important; }
-
-/* ── Page header style ── */
-.page-header { 
-    font-size: 1.6rem; 
-    font-weight: 700; 
-    color: #f0f2f5; 
-    margin-bottom: 0.25rem;
-}
-.page-subhead { 
-    font-size: 0.9rem; 
-    color: #6b7280; 
-    margin-bottom: 1.25rem;
+/* Dataframe */
+[data-testid="stDataFrame"] {
+    border: 1px solid #e5e7eb !important;
+    border-radius: 8px !important;
 }
 
-/* ── Scene timestamp badge ── */
-.ts-badge {
-    display: inline-block;
-    background: #2e3140;
-    color: #9ca3af;
-    font-family: monospace;
-    font-size: 0.78rem;
-    padding: 2px 8px;
-    border-radius: 5px;
-    margin-right: 6px;
+/* Plotly */
+[data-testid="stPlotlyChart"] {
+    border: 1px solid #e5e7eb !important;
+    border-radius: 10px !important;
+    overflow: hidden !important;
 }
 
-/* ── YouTube embed ── */
+/* Radio buttons */
+[data-testid="stRadio"] label { color: #374151 !important; }
+
+/* Caption text */
+.stCaption, [data-testid="stCaptionContainer"] { color: #6b7280 !important; }
+small { color: #6b7280 !important; }
+
+/* YouTube embed */
 .yt-container {
     position: relative;
     padding-bottom: 56.25%;
     height: 0;
     overflow: hidden;
     border-radius: 10px;
-    border: 1px solid #2e3140;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
 }
 .yt-container iframe {
     position: absolute;
     top: 0; left: 0;
     width: 100%; height: 100%;
+}
+
+/* Sliders */
+[data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] {
+    background: #f59e0b !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -479,8 +512,8 @@ def page_process():
         st.caption("Supported: .srt (SubRip) and .vtt (WebVTT)")
         ca, cb = st.columns([3, 2], gap="large")
         with ca:
-            uploaded = st.file_uploader("", type=["srt", "vtt"],
-                                         label_visibility="collapsed", key="up_file")
+            uploaded = st.file_uploader("Drop your subtitle file here", type=["srt", "vtt"],
+                                         key="up_file")
             title_f = st.text_input("Video title", placeholder="Leave blank to use filename",
                                     key="up_title")
             yt_link = st.text_input("YouTube URL (optional — to enable the player)",
