@@ -334,333 +334,423 @@ BUILTIN_ADS = [
 # PAGE 1 — LIBRARY
 # Home page: all videos as cards, add new via YouTube URL or MP4+SRT upload
 # ══════════════════════════════════════════════════════════════════════════════
-def page_library():
-    # Header
-    st.markdown("""
-    <div style="padding:8px 0 24px">
-      <div style="font-size:2rem;font-weight:800;color:#111827">🗂️ Video Library</div>
-      <div style="color:#6b7280;font-size:1rem;margin-top:4px">
-        Your content hub — ingest any video, explore and monetise your catalogue
-      </div>
-    </div>""", unsafe_allow_html=True)
 
-    # ── Add Video ──────────────────────────────────────────────────────────
-    with st.expander("➕  Add a Video", expanded=not st.session_state.videos):
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 1 — LIBRARY
+# ══════════════════════════════════════════════════════════════════════════════
+def page_library():
+    st.markdown('<div style="font-size:2rem;font-weight:800;color:#111827;padding:4px 0 6px">🗂️ Video Library</div>', unsafe_allow_html=True)
+    st.caption("Your content hub — ingest any video, explore and monetise your catalogue")
+    st.divider()
+
+    # ── Add Video panel ────────────────────────────────────────────────────
+    with st.expander("➕  Add a Video", expanded=not bool(st.session_state.videos)):
         src = st.radio("Source", ["YouTube URL", "Upload MP4 + Subtitle"], horizontal=True, key="lib_src")
         st.markdown("")
 
+        # ── YouTube ──
         if src == "YouTube URL":
-            c1, c2 = st.columns([4, 1])
-            yt_url = c1.text_input("YouTube URL or video ID", placeholder="https://youtube.com/watch?v=… or video ID", key="lib_yt")
-            c2.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-            adv = st.checkbox("Advanced settings", key="lib_adv_yt")
-            if adv:
-                a1, a2, a3 = st.columns(3)
+            yt_url = st.text_input("YouTube URL or video ID",
+                placeholder="https://youtube.com/watch?v=… or paste the 11-char video ID", key="lib_yt")
+
+            # Manual SRT fallback
+            st.markdown("**Subtitle file** *(optional — upload if auto-fetch fails)*")
+            manual_srt = st.file_uploader("Upload .srt or .vtt (leave empty to auto-fetch)",
+                type=["srt","vtt"], key="lib_yt_srt")
+            if manual_srt:
+                st.success(f"✅ Using uploaded subtitle: {manual_srt.name}")
+            else:
+                st.caption("ℹ️ Auto-fetch works for most public videos. If it fails, download the SRT from YouTube Studio or DownSub.com and upload it here.")
+
+            with st.expander("⚙️ Detection settings"):
+                a1,a2,a3 = st.columns(3)
                 min_s = a1.slider("Min scene (s)", 10, 90, 20, 5, key="lib_min")
                 max_s = a2.slider("Max scene (s)", 60, 300, 120, 10, key="lib_max")
                 sens  = a3.slider("Sensitivity", 0.2, 0.7, 0.35, 0.05, key="lib_sens")
-            else:
-                min_s, max_s, sens = 20, 120, 0.35
 
             if st.button("⚡ Process YouTube Video", type="primary", key="lib_yt_go"):
                 vid_id = _yt_id(yt_url.strip()) if yt_url else None
                 if not vid_id:
-                    st.error("Invalid YouTube URL"); st.stop()
+                    st.error("Invalid YouTube URL or video ID"); st.stop()
                 if vid_id in st.session_state.videos:
-                    st.warning("Already in library."); st.stop()
-                with st.spinner("Fetching transcript & metadata…"):
-                    transcript = fetch_youtube_transcript(vid_id)
-                    if not transcript:
-                        st.error("No transcript available for this video."); st.stop()
-                    meta = fetch_youtube_metadata(vid_id, st.session_state.yt_api_key or None)
-                    title = meta.get("title","YouTube Video") if meta else "YouTube Video"
-                    vm = VideoProcessor(min_s, max_s, sens).process_file(transcript, title, "srt")
-                    vm.yt_id = vid_id
-                _register(vm)
-                st.success(f"✅ **{vm.title}** — {vm.scene_count} scenes"); st.rerun()
+                    st.warning("This video is already in your library."); st.stop()
 
-        else:  # Upload
-            c1, c2 = st.columns(2)
+                with st.spinner("Processing…"):
+                    # Try manual SRT first, then auto-fetch
+                    if manual_srt:
+                        transcript = manual_srt.read().decode("utf-8", errors="replace")
+                        fmt = "vtt" if manual_srt.name.lower().endswith(".vtt") else "srt"
+                    else:
+                        transcript = fetch_youtube_transcript(vid_id)
+                        fmt = "srt"
+                        if not transcript:
+                            st.error("❌ Could not auto-fetch transcript. Try uploading the SRT file manually (download from YouTube Studio → Subtitles, or use DownSub.com).")
+                            st.stop()
+
+                    meta  = fetch_youtube_metadata(vid_id, st.session_state.yt_api_key or None)
+                    title = meta.get("title", f"YouTube · {vid_id}") if meta else f"YouTube · {vid_id}"
+                    vm    = VideoProcessor(min_s, max_s, sens).process_file(transcript, title, fmt)
+                    vm.yt_id = vid_id
+
+                _register(vm)
+                st.success(f"✅ **{vm.title}** — {vm.scene_count} scenes detected")
+                st.rerun()
+
+        # ── Upload ──
+        else:
+            c1, c2 = st.columns([3, 2], gap="large")
             with c1:
-                mp4_file = st.file_uploader("Video file (MP4, MOV, WebM)", type=["mp4","mov","webm","avi"], key="lib_mp4")
-                srt_file = st.file_uploader("Subtitle file (.srt or .vtt) — required", type=["srt","vtt"], key="lib_srt")
-                title_in = st.text_input("Video title", placeholder="e.g. Spider-Man Episode 3", key="lib_title")
+                mp4_file = st.file_uploader("Video file (MP4, MOV, WebM — optional for player)",
+                    type=["mp4","mov","webm","avi"], key="lib_mp4")
+                srt_file = st.file_uploader("Subtitle file (.srt or .vtt) — required for analysis",
+                    type=["srt","vtt"], key="lib_srt")
+                title_in = st.text_input("Video title", placeholder="e.g. Spider-Man No Way Home", key="lib_title")
+                if not srt_file:
+                    st.info("📌 A subtitle/transcript file is required for scene analysis. Video file is optional (enables live player).")
             with c2:
                 st.markdown("**Detection settings**")
-                min_s = st.slider("Min scene (s)", 10, 90, 20, 5,   key="lib_u_min")
-                max_s = st.slider("Max scene (s)", 60, 300, 120, 10, key="lib_u_max")
-                sens  = st.slider("Sensitivity",  0.2, 0.7, 0.35, 0.05, key="lib_u_sens")
+                min_s = st.slider("Min scene (s)", 10, 90, 20, 5,    key="lib_u_min")
+                max_s = st.slider("Max scene (s)", 60, 300, 120, 10,  key="lib_u_max")
+                sens  = st.slider("Sensitivity",   0.2, 0.7, 0.35, 0.05, key="lib_u_sens")
 
             if srt_file and st.button("⚡ Process Video", type="primary", key="lib_up_go"):
                 srt_content = srt_file.read().decode("utf-8", errors="replace")
-                fmt = "vtt" if srt_file.name.lower().endswith(".vtt") else "srt"
+                fmt   = "vtt" if srt_file.name.lower().endswith(".vtt") else "srt"
                 title = title_in.strip() or (mp4_file.name if mp4_file else "Uploaded Video")
-                with st.spinner("Analysing scenes…"):
+                with st.spinner("Detecting scenes · classifying content · analysing sentiment…"):
                     vm = VideoProcessor(min_s, max_s, sens).process_file(srt_content, title, fmt)
                 if not vm.scenes:
-                    st.error("No scenes detected."); st.stop()
+                    st.error("No scenes detected — check subtitle format."); st.stop()
                 vm.yt_id = None
                 _register(vm)
-                # Store video bytes
                 if mp4_file:
                     mp4_file.seek(0)
                     raw = mp4_file.read()
-                    st.session_state.video_b64[vm.video_id] = _b64.b64encode(raw).decode()
+                    st.session_state.video_b64[vm.video_id]  = _b64.b64encode(raw).decode()
                     ext = mp4_file.name.split(".")[-1].lower()
-                    st.session_state.video_mime[vm.video_id] = {"mp4":"video/mp4","mov":"video/mp4","webm":"video/webm","avi":"video/x-msvideo"}.get(ext,"video/mp4")
+                    st.session_state.video_mime[vm.video_id] = {
+                        "mp4":"video/mp4","mov":"video/mp4",
+                        "webm":"video/webm","avi":"video/x-msvideo"}.get(ext,"video/mp4")
                 st.success(f"✅ **{vm.title}** — {vm.scene_count} scenes"); st.rerun()
-            elif not srt_file:
-                st.info("📌 Subtitle file is required for scene analysis")
 
-    st.divider()
-
-    # ── Library grid ──────────────────────────────────────────────────────
+    # ── Library ────────────────────────────────────────────────────────────
     if not st.session_state.videos:
-        st.markdown("""
-        <div style="text-align:center;padding:60px 20px;color:#9ca3af">
+        st.markdown("""<div style="text-align:center;padding:60px 20px;color:#9ca3af">
           <div style="font-size:3rem">🎬</div>
           <div style="font-size:1.1rem;font-weight:600;margin-top:12px">No videos yet</div>
-          <div style="margin-top:6px">Use "Add a Video" above to ingest your first video</div>
+          <div style="margin-top:6px">Use "Add a Video" above to get started</div>
         </div>""", unsafe_allow_html=True)
         return
 
-    # Summary row
-    all_scenes = sum(v.scene_count for v in st.session_state.videos.values())
-    all_dur    = sum(v.duration_sec for v in st.session_state.videos.values())
-    dur_str    = f"{int(all_dur//3600)}h {int((all_dur%3600)//60)}m" if all_dur>3600 else f"{int(all_dur//60)}m"
+    # KPI row
+    all_dur  = sum(v.duration_sec for v in st.session_state.videos.values())
+    dur_str  = f"{int(all_dur//3600)}h {int((all_dur%3600)//60)}m" if all_dur>3600 else f"{int(all_dur//60)}m"
     c1,c2,c3,c4 = st.columns(4)
-    c1.metric("Total Videos", len(st.session_state.videos))
-    c2.metric("Total Scenes", all_scenes)
-    c3.metric("Total Duration", dur_str)
-    all_key = sum(len(v.key_scenes) for v in st.session_state.videos.values())
-    c4.metric("Key Moments", all_key)
+    c1.metric("Total Videos",    len(st.session_state.videos))
+    c2.metric("Total Scenes",    sum(v.scene_count for v in st.session_state.videos.values()))
+    c3.metric("Total Duration",  dur_str)
+    c4.metric("Key Moments",     sum(len(v.key_scenes) for v in st.session_state.videos.values()))
 
-    st.markdown("")
     st.markdown("### Your Videos")
-
     for vm in st.session_state.videos.values():
-        is_active = vm.video_id == st.session_state.selected_video
-        safe_pct = sum(1 for s in vm.scenes if s.brand_safety.get("safety_score",1)>=0.7) / max(vm.scene_count,1)
-        avg_eng  = sum(s.engagement_score for s in vm.scenes) / max(vm.scene_count,1)
-        top_iab  = [c["name"] for c in vm.dominant_iab[:4]]
-        has_video = vm.video_id in st.session_state.video_b64
+        _library_card(vm)
 
-        with st.container(border=True):
-            # Card header
-            h1, h2, h3 = st.columns([6, 2, 2])
-            with h1:
-                badge = ' <span style="background:#fef3c7;color:#d97706;font-size:11px;padding:2px 8px;border-radius:6px;font-weight:600">ACTIVE</span>' if is_active else ""
-                yt_badge = ' <span style="background:#fee2e2;color:#dc2626;font-size:11px;padding:2px 8px;border-radius:6px">YouTube</span>' if vm.yt_id else (' <span style="background:#dbeafe;color:#2563eb;font-size:11px;padding:2px 8px;border-radius:6px">MP4</span>' if has_video else ' <span style="background:#f3f4f6;color:#6b7280;font-size:11px;padding:2px 8px;border-radius:6px">SRT only</span>')
-                st.markdown(f'<div style="font-size:1.1rem;font-weight:700;color:#111827">{vm.title}{badge}{yt_badge}</div>', unsafe_allow_html=True)
-                st.caption(f"{vm.fmt_duration()}  ·  {vm.scene_count} scenes  ·  {len(vm.key_scenes)} key moments  ·  arc: {vm.narrative_structure}")
 
-            # Metrics
-            m1,m2,m3 = st.columns(3)
-            m1.metric("Avg Engagement", f"{avg_eng:.2f}")
-            m2.metric("Brand Safe", f"{safe_pct:.0%}")
-            m3.metric("Key Scenes",  len(vm.key_scenes))
+def _library_card(vm: VideoMetadata):
+    is_active = vm.video_id == st.session_state.selected_video
+    safe_pct  = sum(1 for s in vm.scenes if s.brand_safety.get("safety_score",1)>=0.7) / max(vm.scene_count,1)
+    avg_eng   = sum(s.engagement_score for s in vm.scenes) / max(vm.scene_count,1)
+    has_mp4   = vm.video_id in st.session_state.video_b64
+    has_yt    = bool(getattr(vm,"yt_id",None))
 
-            # IAB tags
-            tags_html = "".join(_tag_chip(t) for t in top_iab)
-            st.markdown(tags_html, unsafe_allow_html=True)
+    with st.container(border=True):
+        # Title row
+        active_badge = ' <span style="background:#fef3c7;color:#d97706;font-size:11px;padding:2px 8px;border-radius:6px;font-weight:600">ACTIVE</span>' if is_active else ""
+        src_badge    = (' <span style="background:#fee2e2;color:#dc2626;font-size:11px;padding:2px 8px;border-radius:6px">▶ YouTube</span>' if has_yt
+                        else ' <span style="background:#dbeafe;color:#2563eb;font-size:11px;padding:2px 8px;border-radius:6px">🎞 MP4</span>' if has_mp4
+                        else ' <span style="background:#f3f4f6;color:#6b7280;font-size:11px;padding:2px 8px;border-radius:6px">📄 SRT only</span>')
+        st.markdown(f'<div style="font-size:1.1rem;font-weight:700;color:#111827">{vm.title}{active_badge}{src_badge}</div>', unsafe_allow_html=True)
+        st.caption(f"{vm.fmt_duration()}  ·  {vm.scene_count} scenes  ·  {len(vm.key_scenes)} key moments  ·  arc: **{vm.narrative_structure}**")
 
-            # Actions
-            a1,a2,a3,a4 = st.columns(4)
-            if a1.button("🔬 Analyse", key=f"lib_analyse_{vm.video_id}"):
-                st.session_state.selected_video = vm.video_id
-                st.session_state.page = "analyse"
-                st.rerun()
-            if a2.button("📢 Monetise", key=f"lib_monetise_{vm.video_id}"):
-                st.session_state.selected_video = vm.video_id
-                st.session_state.page = "monetise"
-                st.rerun()
-            if a3.button("📊 Insights", key=f"lib_insights_{vm.video_id}"):
-                st.session_state.selected_video = vm.video_id
-                st.session_state.page = "insights"
-                st.rerun()
-            if a4.button("🗑 Remove", key=f"lib_del_{vm.video_id}"):
-                del st.session_state.videos[vm.video_id]
-                st.session_state.video_b64.pop(vm.video_id, None)
-                st.session_state.video_mime.pop(vm.video_id, None)
-                st.session_state.ad_markers.pop(vm.video_id, None)
-                if st.session_state.selected_video == vm.video_id:
-                    st.session_state.selected_video = next(iter(st.session_state.videos), None)
-                st.rerun()
+        # Metrics
+        m1,m2,m3,m4 = st.columns(4)
+        m1.metric("Avg Engagement", f"{avg_eng:.2f}")
+        m2.metric("Brand Safe",     f"{safe_pct:.0%}")
+        m3.metric("Key Scenes",     len(vm.key_scenes))
+        # Best ad opportunity scene
+        best_scene = max(vm.scenes, key=lambda s: s.ad_suitability * s.engagement_score) if vm.scenes else None
+        m4.metric("Top Ad Moment", best_scene.start_fmt if best_scene else "—")
+
+        # Tags
+        tags_html = "".join(_tag_chip(c["name"]) for c in vm.dominant_iab[:5])
+        st.markdown(tags_html, unsafe_allow_html=True)
+        st.markdown("")
+
+        # Actions
+        a1,a2,a3,a4 = st.columns(4)
+        if a1.button("🔬 Analyse", key=f"lib_an_{vm.video_id}"):
+            st.session_state.selected_video = vm.video_id
+            st.session_state.page = "analyse"; st.rerun()
+        if a2.button("📢 Monetise", key=f"lib_mo_{vm.video_id}"):
+            st.session_state.selected_video = vm.video_id
+            st.session_state.page = "monetise"; st.rerun()
+        if a3.button("📊 Insights", key=f"lib_in_{vm.video_id}"):
+            st.session_state.selected_video = vm.video_id
+            st.session_state.page = "insights"; st.rerun()
+        if a4.button("🗑 Remove", key=f"lib_dl_{vm.video_id}"):
+            del st.session_state.videos[vm.video_id]
+            for d in [st.session_state.video_b64, st.session_state.video_mime, st.session_state.ad_markers]:
+                d.pop(vm.video_id, None)
+            if st.session_state.selected_video == vm.video_id:
+                st.session_state.selected_video = next(iter(st.session_state.videos), None)
+            st.rerun()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 2 — ANALYSE
-# Deep-dive into one video: watch, scenes, search, ad opportunities
 # ══════════════════════════════════════════════════════════════════════════════
 def page_analyse():
     vm = _active_vm()
     if not vm:
-        st.info("No video selected. Go to Library and add one.")
-        if st.button("← Go to Library"):
-            st.session_state.page = "library"; st.rerun()
+        st.info("No video selected — go to Library first.")
+        if st.button("← Library"): st.session_state.page="library"; st.rerun()
         return
 
-    yt_id = getattr(vm, "yt_id", None)
+    yt_id   = getattr(vm,"yt_id",None)
     has_mp4 = vm.video_id in st.session_state.video_b64
+    avg_eng = round(sum(s.engagement_score for s in vm.scenes)/max(vm.scene_count,1),2)
+    safe_pct= f"{sum(1 for s in vm.scenes if s.brand_safety.get('safety_score',1)>=0.7)/max(vm.scene_count,1):.0%}"
 
     # Header
-    st.markdown(f"""
-    <div style="padding:4px 0 20px">
-      <div style="font-size:1.8rem;font-weight:800;color:#111827">🔬 {vm.title}</div>
-      <div style="color:#6b7280;margin-top:4px">{vm.fmt_duration()} · {vm.scene_count} scenes · {vm.narrative_structure}</div>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(f'<div style="font-size:1.8rem;font-weight:800;color:#111827;padding:4px 0 4px">🔬 {vm.title}</div>', unsafe_allow_html=True)
+    st.caption(f"{vm.fmt_duration()} · {vm.scene_count} scenes · arc: **{vm.narrative_structure}**")
 
-    # KPIs
-    avg_eng  = round(sum(s.engagement_score for s in vm.scenes)/max(vm.scene_count,1),2)
-    safe_pct = f"{sum(1 for s in vm.scenes if s.brand_safety.get('safety_score',1)>=0.7)/max(vm.scene_count,1):.0%}"
     c1,c2,c3,c4,c5 = st.columns(5)
-    c1.metric("Scenes", vm.scene_count)
-    c2.metric("Duration", vm.fmt_duration())
+    c1.metric("Scenes",      vm.scene_count)
+    c2.metric("Duration",    vm.fmt_duration())
     c3.metric("Key Moments", len(vm.key_scenes))
     c4.metric("Avg Engagement", avg_eng)
-    c5.metric("Brand Safe", safe_pct)
+    c5.metric("Brand Safe",  safe_pct)
 
-    # Content tags
     tags_html = "".join(_tag_chip(c["name"]) for c in vm.dominant_iab[:6])
-    if vm.franchise_themes:
-        tags_html += "".join(_tag_chip(t, "#eff6ff","#bfdbfe","#1d4ed8") for t in vm.franchise_themes[:4])
+    if getattr(vm,"franchise_themes",None):
+        tags_html += "".join(_tag_chip(t,"#eff6ff","#bfdbfe","#1d4ed8") for t in vm.franchise_themes[:4])
     st.markdown(tags_html, unsafe_allow_html=True)
-    st.markdown("")
+    st.divider()
 
-    # ── Tabs ──────────────────────────────────────────────────────────────
-    tab_watch, tab_timeline, tab_scenes, tab_search = st.tabs([
-        "▶️  Watch & Explore",
-        "📈  Scene Timeline",
-        "🎬  All Scenes",
-        "🔍  Search Moments",
+    tab_watch, tab_timeline, tab_scenes, tab_search, tab_opps = st.tabs([
+        "▶️  Watch", "📈  Timeline", "🎬  Scenes", "🔍  Search", "🎯  Ad Opportunities"
     ])
 
-    # ── TAB: WATCH & EXPLORE ──────────────────────────────────────────────
+    # ── WATCH ─────────────────────────────────────────────────────────────
     with tab_watch:
         if yt_id:
             _yt_player_with_scenes(yt_id, vm.scenes, vm.key_scenes)
         elif has_mp4:
             _mp4_player_with_scenes(vm)
         else:
-            st.info("No playable video — only subtitle/scene data is available. Use the other tabs to explore.")
-            st.markdown("**Scene overview:**")
-            for s in vm.scenes[:5]:
-                st.caption(f"`{s.start_fmt}` — {s.text[:100]}…")
+            st.info("No playable video — explore scenes in the other tabs.")
+            for s in vm.scenes[:6]:
+                st.caption(f"`{s.start_fmt}` — {s.text[:90]}…")
 
-    # ── TAB: SCENE TIMELINE ───────────────────────────────────────────────
+    # ── TIMELINE ──────────────────────────────────────────────────────────
     with tab_timeline:
         _render_timeline(vm)
 
-    # ── TAB: ALL SCENES ───────────────────────────────────────────────────
+    # ── SCENES ────────────────────────────────────────────────────────────
     with tab_scenes:
-        st.markdown(f"**{vm.scene_count} scenes** — filter and explore")
         f1,f2,f3,f4 = st.columns(4)
-        sent_f  = f1.multiselect("Sentiment", ["positive","neutral","negative"],
-                                  default=["positive","neutral","negative"], key="sc_sent")
-        min_eng = f2.slider("Min engagement", 0.0, 1.0, 0.0, 0.05, key="sc_eng")
-        min_fit = f3.slider("Min ad fit",     0.0, 1.0, 0.0, 0.05, key="sc_fit")
+        sent_f   = f1.multiselect("Sentiment", ["positive","neutral","negative"],
+                                   default=["positive","neutral","negative"], key="sc_sent")
+        min_eng  = f2.slider("Min engagement", 0.0,1.0,0.0,0.05, key="sc_eng")
+        min_fit  = f3.slider("Min ad fit",     0.0,1.0,0.0,0.05, key="sc_fit")
         key_only = f4.checkbox("Key moments only", key="sc_key")
-
         shown = [s for s in vm.scenes
                  if s.sentiment.get("label","neutral") in sent_f
                  and s.engagement_score >= min_eng
-                 and s.ad_suitability  >= min_fit
+                 and s.ad_suitability   >= min_fit
                  and (not key_only or s.scene_id in vm.key_scenes)]
-
-        st.caption(f"Showing **{len(shown)}** of {vm.scene_count} scenes")
+        st.caption(f"**{len(shown)}** of {vm.scene_count} scenes")
         for scene in shown:
             _scene_card(scene, vm, yt_id=yt_id)
 
-    # ── TAB: SEARCH MOMENTS ───────────────────────────────────────────────
+    # ── SEARCH ────────────────────────────────────────────────────────────
     with tab_search:
         se = st.session_state.search_engine
-        if "analyse_q_staged" not in st.session_state:
-            st.session_state.analyse_q_staged = ""
-        default_q = st.session_state.pop("analyse_q_staged", "")
-        query = st.text_input("Search by meaning — describe what you're looking for",
-            placeholder="e.g. 'tense confrontation'  ·  'product demo'  ·  'emotional speech'",
-            key="analyse_q", value=default_q)
-
+        if "aq_staged" not in st.session_state: st.session_state.aq_staged=""
+        default_q = st.session_state.pop("aq_staged","")
+        query = st.text_input("Search by meaning",
+            placeholder="e.g. 'tense confrontation' · 'product demo' · 'emotional speech'",
+            key="aq", value=default_q)
         if not query:
-            st.caption("**Quick picks:**")
-            examples = ["action sequence","emotional moment","expert interview",
-                        "product showcase","dramatic reveal","comedy scene",
-                        "outdoor wide shot","breaking news","tutorial step"]
-            cols = st.columns(3)
-            for i, ex in enumerate(examples):
-                if cols[i%3].button(ex, key=f"aq_{i}"):
-                    st.session_state.analyse_q_staged = ex; st.rerun()
+            st.caption("**Try:**")
+            examples=["action sequence","emotional moment","expert interview","product showcase",
+                      "dramatic reveal","comedy scene","tutorial step","key decision","outdoor scene"]
+            cols=st.columns(3)
+            for i,ex in enumerate(examples):
+                if cols[i%3].button(ex,key=f"aq_{i}"):
+                    st.session_state.aq_staged=ex; st.rerun()
         else:
-            k1,k2,k3 = st.columns(3)
-            top_k  = k1.select_slider("Results", [3,5,10,20], value=5, key="aq_k")
-            safety = k2.selectbox("Safety", ["Any","Moderate (50%+)","Strict (80%+)"], key="aq_safe")
+            k1,k2,k3=st.columns(3)
+            top_k  = k1.select_slider("Results",[3,5,10,20],value=5,key="aq_k")
+            safety = k2.selectbox("Safety",["Any","Moderate (50%+)","Strict (80%+)"],key="aq_safe")
+            scope  = k3.radio("Scope",["This video","All videos"],horizontal=True,key="aq_scope")
             smap   = {"Any":0.0,"Moderate (50%+)":0.5,"Strict (80%+)":0.8}
-            scope  = k3.radio("Scope", ["This video","All videos"], horizontal=True, key="aq_scope")
             with st.spinner("Searching…"):
-                results = se.search(query, top_k=top_k, diversify=True, min_safety=smap[safety], expand=True)
-            if scope == "This video":
-                results = [r for r in results if r.scene.video_id == vm.video_id]
-            if not results:
-                st.warning("No matches — try different words.")
+                results = se.search(query,top_k=top_k,diversify=True,min_safety=smap[safety],expand=True)
+            if scope=="This video":
+                results=[r for r in results if r.scene.video_id==vm.video_id]
+            if not results: st.warning("No matches — try different words.")
             else:
                 st.success(f"**{len(results)} scenes** matched")
                 for r in results:
-                    _vm2 = st.session_state.videos.get(r.scene.video_id, vm)
-                    _yt2 = getattr(_vm2,"yt_id",None)
+                    _vm2=st.session_state.videos.get(r.scene.video_id,vm)
                     if scope=="All videos" and len(st.session_state.videos)>1:
                         st.caption(f"📹 {_vm2.title[:50]}")
-                    _scene_card(r.scene, _vm2, score=r.score, yt_id=_yt2)
+                    _scene_card(r.scene,_vm2,score=r.score,yt_id=getattr(_vm2,"yt_id",None))
+
+    # ── AD OPPORTUNITIES ──────────────────────────────────────────────────
+    with tab_opps:
+        _ad_opportunity_panel(vm, yt_id)
 
 
-# ── Scene card component ───────────────────────────────────────────────────
+# ── Ad Opportunity Panel ────────────────────────────────────────────────────
+def _ad_opportunity_panel(vm: VideoMetadata, yt_id=None):
+    """Top 5 best ad insertion points with full reasoning."""
+    st.markdown("### 🎯 Top Ad Opportunities")
+    st.caption("AI-scored moments ranked by engagement × ad fit × brand safety × context. Click any to jump or add to Monetise.")
+
+    def _opp_score(s):
+        return s.engagement_score * s.ad_suitability * s.brand_safety.get("safety_score",1.0)
+
+    ranked = sorted(vm.scenes, key=_opp_score, reverse=True)[:5]
+
+    for rank, scene in enumerate(ranked):
+        score  = _opp_score(scene)
+        ad, sim = _best_ad_for_scene(scene)
+        sent   = scene.sentiment.get("label","neutral")
+        safety = scene.brand_safety.get("safety_score",1.0)
+        is_key = scene.scene_id in vm.key_scenes
+
+        # Build reasoning
+        reasons = []
+        if scene.engagement_score > 0.6:  reasons.append(f"⚡ High engagement ({scene.engagement_score:.0%})")
+        if scene.ad_suitability > 0.6:    reasons.append(f"🎯 Strong ad fit ({scene.ad_suitability:.0%})")
+        if safety >= 0.8:                  reasons.append("🛡 Fully brand-safe")
+        if sent == "positive":             reasons.append("🟢 Positive sentiment")
+        if is_key:                         reasons.append("⭐ Key narrative moment")
+        if sim["total"] > 0.4:             reasons.append(f"📢 Strong ad match ({sim['total']:.0%})")
+        if not reasons:                    reasons.append("📍 Contextually suitable placement")
+
+        medal = ["🥇","🥈","🥉","4️⃣","5️⃣"][rank]
+        pct   = int(score * 100)
+        bar_c = "#16a34a" if score>0.4 else "#f59e0b" if score>0.2 else "#9ca3af"
+
+        with st.container(border=True):
+            h1,h2 = st.columns([7,3])
+            with h1:
+                st.markdown(f"**{medal} Rank #{rank+1}** — `{scene.start_fmt} → {scene.end_fmt}`"
+                            + (" ⭐" if is_key else ""))
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:10px;margin:4px 0">'
+                    f'<div style="flex:1;height:8px;background:#f3f4f6;border-radius:4px">'
+                    f'<div style="width:{pct}%;height:8px;background:{bar_c};border-radius:4px"></div></div>'
+                    f'<span style="font-size:14px;font-weight:800;color:{bar_c}">{pct}%</span>'
+                    f'<span style="font-size:11px;color:#9ca3af">opportunity score</span></div>',
+                    unsafe_allow_html=True)
+                st.caption(" · ".join(reasons))
+            with h2:
+                st.markdown(
+                    f'<div style="background:{"#f0fdf4" if sim["total"]>0.4 else "#fefce8"};'
+                    f'border:1px solid {"#bbf7d0" if sim["total"]>0.4 else "#fef08a"};'
+                    f'border-radius:10px;padding:10px;text-align:center">'
+                    f'<div style="font-size:1.4rem">{ad["emoji"]}</div>'
+                    f'<div style="font-weight:700;font-size:13px">{ad["brand"]}</div>'
+                    f'<div style="font-size:11px;color:#6b7280">{ad["title"]}</div>'
+                    f'<div style="font-weight:700;color:{"#16a34a" if sim["total"]>0.4 else "#ca8a04"};font-size:13px">'
+                    f'🎯 {sim["total"]:.0%} match</div></div>',
+                    unsafe_allow_html=True)
+
+            # Scene preview
+            st.write(scene.text[:150] + ("…" if len(scene.text)>150 else ""))
+            tag_html = "".join(_tag_chip(c["name"],"#f0fdf4","#bbf7d0","#166534","11px")
+                                for c in scene.iab_categories[:3])
+            if tag_html: st.markdown(tag_html, unsafe_allow_html=True)
+
+            # Signal breakdown
+            sig_cols = st.columns(4)
+            sig_cols[0].metric("Engagement",  f"{scene.engagement_score:.0%}")
+            sig_cols[1].metric("Ad Fit",       f"{scene.ad_suitability:.0%}")
+            sig_cols[2].metric("Brand Safety", f"{safety:.0%}")
+            sig_cols[3].metric("Ad Match",     f"{sim['total']:.0%}")
+
+            # Actions
+            ac1, ac2, ac3 = st.columns(3)
+            if yt_id:
+                ac1.link_button(f"▶ Jump to {scene.start_fmt}", f"https://youtube.com/watch?v={yt_id}&t={scene.start_sec}s")
+            if ac2.button(f"➕ Add to Ad Plan", key=f"opp_add_{scene.scene_id}"):
+                vid_id = vm.video_id
+                if vid_id not in st.session_state.ad_markers:
+                    st.session_state.ad_markers[vid_id] = []
+                existing = [m["sec"] for m in st.session_state.ad_markers[vid_id]]
+                if scene.start_sec not in existing:
+                    st.session_state.ad_markers[vid_id].append({
+                        "sec":scene.start_sec,"fmt":_fmt_sec(scene.start_sec),
+                        "ad":ad,"mode":"auto","duration":15,
+                        "sim":sim["total"],"reason":" · ".join(reasons[:3])})
+                    st.success(f"Added {scene.start_fmt} → Monetise tab")
+                else:
+                    st.info("Already in plan")
+
+
+# ── Shared scene card ──────────────────────────────────────────────────────
 def _scene_card(scene: Scene, vm: VideoMetadata, score=None, yt_id=None, ad_match=None):
     is_key = scene.scene_id in vm.key_scenes
     sent   = scene.sentiment.get("label","neutral")
     safety = scene.brand_safety.get("safety_score",1.0)
-
     with st.container(border=True):
-        r1, r2 = st.columns([7,3])
+        r1,r2 = st.columns([7,3])
         with r1:
-            key_star = " ⭐" if is_key else ""
-            score_str = f" — 🎯 **{score:.0%}** match" if score else ""
-            st.markdown(f'`{scene.start_fmt} → {scene.end_fmt}` **{scene.duration_sec:.0f}s**{key_star}{score_str}')
+            st.markdown(f'`{scene.start_fmt}→{scene.end_fmt}` **{scene.duration_sec:.0f}s**'
+                        +(" ⭐" if is_key else "")+(f" — 🎯 **{score:.0%}**" if score else ""))
         with r2:
-            badges = f'{_sent_icon(sent)} {sent}  ·  🛡 {safety:.0%}  ·  ⚡ {scene.engagement_score:.2f}'
-            st.caption(badges)
-        st.write(scene.text[:200] + ("…" if len(scene.text)>200 else ""))
-        tag_html = "".join(_tag_chip(c["name"],"#f0fdf4","#bbf7d0","#166534","11px") for c in scene.iab_categories[:3])
-        if tag_html: st.markdown(tag_html, unsafe_allow_html=True)
+            st.caption(f'{_sent_icon(sent)} {sent}  ·  🛡 {safety:.0%}  ·  ⚡ {scene.engagement_score:.2f}')
+        st.write(scene.text[:200]+("…" if len(scene.text)>200 else ""))
+        tag_html="".join(_tag_chip(c["name"],"#f0fdf4","#bbf7d0","#166534","11px") for c in scene.iab_categories[:3])
+        if tag_html: st.markdown(tag_html,unsafe_allow_html=True)
         if ad_match:
-            ad, sim = ad_match
-            sc = "#16a34a" if sim["total"]>0.45 else "#f59e0b" if sim["total"]>0.25 else "#9ca3af"
-            st.markdown(f'<span style="font-size:12px;color:{sc};font-weight:600">'
-                        f'💡 Best ad: {ad["emoji"]} {ad["brand"]} — {sim["total"]:.0%} match</span>',
-                        unsafe_allow_html=True)
-        if score:
-            st.progress(min(score,1.0))
-        if yt_id:
-            st.link_button(f"▶ Open at {scene.start_fmt}", f"https://youtube.com/watch?v={yt_id}&t={scene.start_sec}s")
+            ad,sim=ad_match
+            sc="#16a34a" if sim["total"]>0.45 else "#f59e0b" if sim["total"]>0.25 else "#9ca3af"
+            st.markdown(f'<span style="font-size:12px;color:{sc};font-weight:600">💡 {ad["emoji"]} {ad["brand"]} — {sim["total"]:.0%} match</span>', unsafe_allow_html=True)
+        if score: st.progress(min(score,1.0))
+        if yt_id: st.link_button(f"▶ Open at {scene.start_fmt}", f"https://youtube.com/watch?v={yt_id}&t={scene.start_sec}s")
 
 
-# ── Scene timeline chart ───────────────────────────────────────────────────
+# ── Interactive Scene Timeline ──────────────────────────────────────────────
 def _render_timeline(vm: VideoMetadata):
-    st.markdown("#### Scene Timeline")
-    st.caption("Each bar is a scene — colour = sentiment · height = engagement · ⭐ = key moment")
+    import json as _j
+
+    st.markdown("#### 📈 Scene Timeline")
+    st.caption("Colour = sentiment · Bar height = engagement · 🟡 dots = ad markers · ⭐ = key moment")
 
     scene_data = []
     for s in vm.scenes:
         sent  = s.sentiment.get("label","neutral")
         color = {"positive":"#34d399","negative":"#f87171","neutral":"#60a5fa"}.get(sent,"#60a5fa")
         scene_data.append({
-            "start": s.start_sec, "end": s.end_sec, "dur": s.duration_sec,
-            "eng": s.engagement_score, "sent": sent, "color": color,
-            "fit": s.ad_suitability, "key": s.scene_id in vm.key_scenes,
-            "label": s.start_fmt,
-            "text": s.text[:60].replace("'","").replace('"',""),
-            "iab": _iab_str(s.iab_categories),
+            "start":s.start_sec,"end":s.end_sec,"dur":s.duration_sec,
+            "eng":s.engagement_score,"sent":sent,"color":color,
+            "fit":s.ad_suitability,"key":s.scene_id in vm.key_scenes,
+            "label":s.start_fmt,"text":s.text[:50].replace("'","").replace('"',""),
+            "iab":_iab_str(s.iab_categories),"safe":s.brand_safety.get("safety_score",1.0),
         })
 
-    # Engagement area chart
+    markers = st.session_state.ad_markers.get(vm.video_id, [])
+    markers_j = _j.dumps([{"sec":m["sec"],"fmt":m["fmt"],
+                            "brand":m["ad"]["brand"],"emoji":m["ad"]["emoji"],
+                            "sim":m.get("sim",0)} for m in markers])
+
+    # ── Plotly engagement chart ──
     df = pd.DataFrame(scene_data)
     fig = go.Figure()
     for sent, col in [("positive","#34d399"),("neutral","#60a5fa"),("negative","#f87171")]:
@@ -669,115 +759,187 @@ def _render_timeline(vm: VideoMetadata):
         fig.add_trace(go.Bar(
             x=sub["start"], y=sub["eng"], name=sent.capitalize(),
             marker_color=col, width=sub["dur"]*0.8,
-            customdata=sub[["label","iab","text","fit"]].values,
-            hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[2]}<br>IAB: %{customdata[1]}<br>Eng: %{y:.2f} · Ad fit: %{customdata[3]:.2f}<extra></extra>"
+            customdata=sub[["label","iab","text","fit","safe"]].values,
+            hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[2]}<br>IAB: %{customdata[1]}<br>Eng: %{y:.0%} · Fit: %{customdata[3]:.0%} · Safe: %{customdata[4]:.0%}<extra></extra>"
         ))
-    # Key moment markers
-    key_scenes = [s for s in scene_data if s["key"]]
-    if key_scenes:
+    # Key moments
+    ks = [s for s in scene_data if s["key"]]
+    if ks:
         fig.add_trace(go.Scatter(
-            x=[s["start"] for s in key_scenes],
-            y=[s["eng"]+0.05 for s in key_scenes],
-            mode="markers+text", name="Key moment",
+            x=[s["start"] for s in ks], y=[s["eng"]+0.06 for s in ks],
+            mode="markers", name="Key moment",
             marker=dict(symbol="star",size=14,color="#f59e0b"),
-            text=["⭐"]*len(key_scenes), textposition="top center",
-            hovertemplate="<b>Key moment</b> @ %{x}s<extra></extra>"
-        ))
+            hovertemplate="Key moment @ %{x}s<extra></extra>"))
+    # Ad marker lines
+    for m in markers:
+        fig.add_vline(x=m["sec"], line_color="#f59e0b", line_width=2,
+                      line_dash="dot",
+                      annotation_text=f'📢{m["fmt"][3:]}',
+                      annotation_font_size=9, annotation_font_color="#d97706")
     fig.update_layout(**PT, height=260, barmode="overlay",
-        xaxis=dict(**_XA, title="Time (seconds)"),
-        yaxis=dict(**_YA, title="Engagement", range=[0,1.1]),
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=_TEXT)))
+        xaxis=dict(**_XA,title="Time (seconds)"),
+        yaxis=dict(**_YA,title="Engagement",range=[0,1.15]),
+        legend=dict(bgcolor="rgba(0,0,0,0)",font=dict(color=_TEXT)))
     st.plotly_chart(fig, use_container_width=True)
 
-    # Ad opportunity heatmap strip
-    st.markdown("#### 🎯 Ad Opportunity Map")
-    st.caption("Green = high match for ads  ·  Click a scene below to see best-matched ads")
-    strip_html = '<div style="display:flex;gap:2px;flex-wrap:wrap;margin:8px 0">'
+    # ── Interactive HTML timeline scrubber ──
+    st.markdown("#### 🖱️ Interactive Timeline — drag to scrub · click scenes to jump")
+    sj = _j.dumps(scene_data)
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+*{{box-sizing:border-box;margin:0;padding:0;font-family:Inter,sans-serif}}
+body{{background:#fff;padding:4px 0}}
+#tl-wrap{{position:relative;user-select:none}}
+#tl{{position:relative;height:60px;background:#f9fafb;border:1px solid #e5e7eb;
+      border-radius:10px;overflow:hidden;cursor:pointer;margin:0 0 6px}}
+.seg{{position:absolute;top:8px;border-radius:4px;transition:opacity .1s;cursor:pointer}}
+.seg:hover{{opacity:.75}}
+.seg.key{{outline:2px solid #f59e0b;outline-offset:1px;z-index:2}}
+.adm{{position:absolute;top:0;bottom:0;width:3px;background:#f59e0b;z-index:5;cursor:grab}}
+.adm:active{{cursor:grabbing}}
+.adm-lbl{{position:absolute;top:-18px;transform:translateX(-50%);font-size:9px;
+           font-weight:700;color:#d97706;white-space:nowrap}}
+#scrub{{position:absolute;top:0;bottom:0;width:2px;background:#111827;z-index:10;pointer-events:none}}
+#tt{{position:fixed;background:#1e293b;color:#fff;padding:6px 10px;border-radius:7px;
+      font-size:12px;pointer-events:none;display:none;z-index:100;max-width:220px;line-height:1.5}}
+#legend{{display:flex;gap:12px;align-items:center;margin-bottom:6px;font-size:11px}}
+.dot{{width:10px;height:10px;border-radius:3px;flex-shrink:0}}
+#info{{font-size:12px;color:#6b7280;min-height:18px;margin-top:4px}}
+</style></head><body>
+<div id="legend">
+  <div class="dot" style="background:#34d399"></div><span>Positive</span>
+  <div class="dot" style="background:#60a5fa"></div><span>Neutral</span>
+  <div class="dot" style="background:#f87171"></div><span>Negative</span>
+  <div class="dot" style="background:#f59e0b;border-radius:50%"></div><span>Key moment</span>
+  <div style="width:3px;height:12px;background:#f59e0b;border-radius:2px"></div><span>Ad marker</span>
+</div>
+<div id="tl-wrap">
+  <div id="tl"></div>
+  <div id="scrub"></div>
+</div>
+<div id="tt"></div>
+<div id="info">Hover over a scene for details</div>
+<script>
+var SC={sj},MK={markers_j};
+var dur=SC.length>0?SC[SC.length-1].end:1;
+var tl=document.getElementById('tl'),tt=document.getElementById('tt');
+
+SC.forEach(function(s){{
+  var seg=document.createElement('div');seg.className='seg'+(s.key?' key':'');
+  var left=(s.start/dur)*100,width=(s.dur/dur)*100,height=Math.max(10,s.eng*44);
+  seg.style.cssText='left:'+left+'%;width:'+Math.max(width,.3)+'%;height:'+height+'px;top:'+(52-height)+'px;background:'+s.color+';opacity:0.85';
+  seg.onmouseenter=function(e){{
+    var d=document.getElementById('info');
+    d.innerHTML='<b>'+s.label+'</b> · '+s.iab+' · eng '+Math.round(s.eng*100)+'% · fit '+Math.round(s.fit*100)+'%';
+    tt.style.display='block';tt.innerHTML='<b>'+s.label+'</b><br>'+s.text+'<br><span style="opacity:.7">'+s.iab+'</span>';
+  }};
+  seg.onmouseleave=function(){{tt.style.display='none';}};
+  seg.onclick=function(){{document.getElementById('info').innerHTML='<b>Jumped to '+s.label+'</b> · '+s.text;}};
+  tl.appendChild(seg);
+}});
+
+// Ad markers (draggable)
+MK.forEach(function(m,i){{
+  var pct=(m.sec/dur)*100;
+  var d=document.createElement('div');d.className='adm';d.style.left=pct+'%';
+  var lbl=document.createElement('div');lbl.className='adm-lbl';
+  lbl.textContent=m.emoji+m.fmt.slice(3);d.appendChild(lbl);
+  // Drag
+  d.addEventListener('mousedown',function(e){{
+    e.stopPropagation();
+    var rect=tl.getBoundingClientRect();
+    function move(ev){{
+      var x=Math.max(0,Math.min(ev.clientX-rect.left,rect.width));
+      var pct2=(x/rect.width)*100;
+      d.style.left=pct2+'%';
+      lbl.textContent=m.emoji+' '+fmt(Math.round((pct2/100)*dur));
+    }}
+    function up(){{document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);}}
+    document.addEventListener('mousemove',move);document.addEventListener('mouseup',up);
+  }});
+  tl.appendChild(d);
+}});
+
+// Scrubber
+tl.addEventListener('mousemove',function(e){{
+  var r=tl.getBoundingClientRect(),x=e.clientX-r.left,pct=x/r.width;
+  document.getElementById('scrub').style.left=(pct*100)+'%';
+  tt.style.left=(e.clientX+12)+'px';tt.style.top=(e.clientY-10)+'px';
+}});
+tl.addEventListener('mouseleave',function(){{tt.style.display='none';}});
+
+function fmt(s){{var m=Math.floor(s/60),sec=s%60;return m+':'+(sec<10?'0':'')+sec;}}
+</script></body></html>"""
+    st.components.v1.html(html, height=140, scrolling=False)
+
+    # ── Ad opportunity heatmap ──
+    st.markdown("#### 🎯 Ad Opportunity Heat Map")
+    st.caption("Each cell = one scene · green = high ad opportunity · ⭐ = key moment · hover for score")
+    strip_html = '<div style="display:flex;flex-wrap:wrap;gap:3px;margin:8px 0">'
     for s in vm.scenes:
-        fit = s.ad_suitability
-        safe = s.brand_safety.get("safety_score",1.0)
-        score = fit * safe
-        alpha = 0.3 + score * 0.7
+        score = s.ad_suitability * s.engagement_score * s.brand_safety.get("safety_score",1.0)
+        alpha = 0.2 + score * 0.8
         is_key = s.scene_id in vm.key_scenes
         border = "2px solid #f59e0b" if is_key else "1px solid #e5e7eb"
-        title = f"{s.start_fmt}: fit {fit:.0%}, safe {safe:.0%}"
-        strip_html += (f'<div title="{title}" style="width:28px;height:28px;border-radius:4px;'
-                       f'background:rgba(22,163,74,{alpha:.2f});border:{border};'
-                       f'display:flex;align-items:center;justify-content:center;font-size:10px">'
-                       + ("⭐" if is_key else "") + "</div>")
+        has_marker = any(abs(m["sec"]-s.start_sec)<5 for m in markers)
+        bg = f"rgba(22,163,74,{alpha:.2f})"
+        title = f"{s.start_fmt}: opp {score:.0%}, eng {s.engagement_score:.0%}, fit {s.ad_suitability:.0%}"
+        strip_html += (f'<div title="{title}" style="width:32px;height:32px;border-radius:5px;'
+                       f'background:{bg};border:{border};display:flex;align-items:center;'
+                       f'justify-content:center;font-size:11px;position:relative">'
+                       + ("⭐" if is_key else ("📢" if has_marker else "")) + "</div>")
     strip_html += "</div>"
     st.markdown(strip_html, unsafe_allow_html=True)
 
 
-# ── YouTube player with scene list ─────────────────────────────────────────
-def _yt_player_with_scenes(vid_id: str, scenes, key_scene_ids: set):
+# ── YouTube player ──────────────────────────────────────────────────────────
+def _yt_player_with_scenes(vid_id, scenes, key_scene_ids):
     import json
-    scene_data = []
-    for i, s in enumerate(scenes):
-        scene_data.append({
-            "idx":i,"start":s.start_sec,"end":s.end_sec,
+    sd = []
+    for i,s in enumerate(scenes):
+        sd.append({"idx":i,"start":s.start_sec,"end":s.end_sec,
             "start_fmt":s.start_fmt,"end_fmt":s.end_fmt,"dur":int(s.duration_sec),
             "text":s.text[:200].replace('"','').replace("\n"," "),
             "sent":s.sentiment.get("label","neutral"),
             "sent_icon":_sent_icon(s.sentiment.get("label","neutral")),
             "safety":f"{s.brand_safety.get('safety_score',1):.0%}",
-            "iab":_iab_str(s.iab_categories),
-            "eng":f"{s.engagement_score:.2f}",
-            "fit":f"{s.ad_suitability:.2f}",
-            "is_key":s.scene_id in key_scene_ids,
-        })
-    sj = json.dumps(scene_data)
-    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+            "iab":_iab_str(s.iab_categories),"eng":f"{s.engagement_score:.2f}",
+            "fit":f"{s.ad_suitability:.2f}","is_key":s.scene_id in key_scene_ids})
+    sj=json.dumps(sd)
+    html=f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
 *{{box-sizing:border-box;margin:0;padding:0;font-family:Inter,sans-serif}}
 body{{background:#fff}}
 #wrap{{display:flex;gap:14px;width:100%}}
 #pc{{flex:0 0 58%}}
-#pw{{position:relative;padding-bottom:56.25%;height:0;overflow:hidden;
-      border-radius:10px;border:1px solid #e5e7eb;box-shadow:0 2px 8px rgba(0,0,0,.07)}}
+#pw{{position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:10px;border:1px solid #e5e7eb;box-shadow:0 2px 8px rgba(0,0,0,.07)}}
 #pw iframe{{position:absolute;top:0;left:0;width:100%;height:100%}}
-#np{{margin-top:8px;padding:7px 12px;background:#fff7ed;border:1px solid #fed7aa;
-      border-radius:8px;font-size:12px;color:#92400e;display:none}}
-#sc{{flex:1;height:520px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:10px;
-      padding:8px;background:#fafafa}}
+#np{{margin-top:8px;padding:7px 12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:12px;color:#92400e;display:none}}
+#sc{{flex:1;height:520px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:10px;padding:8px;background:#fafafa}}
 #fb{{display:flex;gap:8px;margin-bottom:9px;align-items:center;flex-wrap:wrap}}
-#fb select,#fb input{{border:1px solid #d1d5db;border-radius:6px;padding:4px 8px;
-  font-size:12px;background:#fff;color:#374151}}
-#fb label{{font-size:12px;color:#6b7280;font-weight:500}}
-#fc{{font-size:12px;color:#9ca3af;margin-left:auto}}
-.card{{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;
-        margin-bottom:7px;cursor:pointer;transition:all .15s}}
+#fb select,#fb input{{border:1px solid #d1d5db;border-radius:6px;padding:4px 8px;font-size:12px;background:#fff;color:#374151}}
+#fb label{{font-size:12px;color:#6b7280;font-weight:500}}#fc{{font-size:12px;color:#9ca3af;margin-left:auto}}
+.card{{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:7px;cursor:pointer;transition:all .15s}}
 .card:hover{{border-color:#f59e0b;box-shadow:0 2px 8px rgba(245,158,11,.15)}}
 .card.active{{border-color:#f59e0b;background:#fffbeb}}
 .card.key{{border-left:3px solid #f59e0b}}
 .ts{{font-family:monospace;font-size:11px;color:#6b7280;background:#f3f4f6;padding:2px 6px;border-radius:4px}}
-.meta{{font-size:11px;color:#6b7280;margin:4px 0}}
-.txt{{font-size:12px;color:#374151;line-height:1.5;margin:5px 0 3px}}
-.iab{{font-size:10px;color:#9ca3af}}
-.pb{{display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:4px 11px;
-      background:#f59e0b;color:#111;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer}}
+.meta{{font-size:11px;color:#6b7280;margin:4px 0}}.txt{{font-size:12px;color:#374151;line-height:1.5;margin:5px 0 3px}}
+.iab{{font-size:10px;color:#9ca3af}}.pb{{display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:4px 11px;background:#f59e0b;color:#111;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer}}
 .pb:hover{{background:#d97706}}
 </style></head><body>
 <div id="wrap">
   <div id="pc">
-    <div id="pw">
-      <iframe id="yti" src="https://www.youtube.com/embed/{vid_id}?enablejsapi=1&rel=0&modestbranding=1&playsinline=1"
-        frameborder="0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen></iframe>
-    </div>
+    <div id="pw"><iframe id="yti" src="https://www.youtube.com/embed/{vid_id}?enablejsapi=1&rel=0&modestbranding=1&playsinline=1" frameborder="0" allow="accelerometer;autoplay;clipboard-write;encrypted-media;gyroscope;picture-in-picture" allowfullscreen></iframe></div>
     <div id="np">▶ Playing from <span id="npt"></span></div>
   </div>
   <div id="sc">
     <div id="fb">
       <label>Sentiment:</label>
-      <select id="sf" onchange="render()">
-        <option value="all">All</option><option value="positive">Positive</option>
-        <option value="neutral">Neutral</option><option value="negative">Negative</option>
-      </select>
+      <select id="sf" onchange="render()"><option value="all">All</option><option value="positive">Positive</option><option value="neutral">Neutral</option><option value="negative">Negative</option></select>
       <label>Min fit:</label>
-      <input type="range" id="ff" min="0" max="1" step="0.1" value="0"
-             oninput="document.getElementById('fv').textContent=this.value;render()">
-      <span id="fv" style="font-size:11px;color:#6b7280">0</span>
-      <span id="fc"></span>
+      <input type="range" id="ff" min="0" max="1" step="0.1" value="0" oninput="document.getElementById('fv').textContent=this.value;render()">
+      <span id="fv" style="font-size:11px;color:#6b7280">0</span><span id="fc"></span>
     </div>
     <div id="sl"></div>
   </div>
@@ -785,12 +947,11 @@ body{{background:#fff}}
 <script>
 var scenes={sj},pl=null,ai=-1;
 var tag=document.createElement('script');tag.src="https://www.youtube.com/iframe_api";document.head.appendChild(tag);
-function onYouTubeIframeAPIReady(){{pl=new YT.Player('yti',{{events:{{'onReady':function(e){{console.log('ready')}}}}}}); }}
+function onYouTubeIframeAPIReady(){{pl=new YT.Player('yti',{{events:{{'onReady':function(){{}}}}}}); }}
 function seek(t,i,f){{
-  ai=i;
-  document.querySelectorAll('.card').forEach(function(c){{c.classList.remove('active')}});
+  ai=i;document.querySelectorAll('.card').forEach(function(c){{c.classList.remove('active')}});
   var c=document.getElementById('c'+i);if(c){{c.classList.add('active');c.scrollIntoView({{behavior:'smooth',block:'nearest'}});}}
-  var np=document.getElementById('np');np.style.display='block';document.getElementById('npt').textContent=f;
+  document.getElementById('np').style.display='block';document.getElementById('npt').textContent=f;
   if(pl&&pl.seekTo){{pl.seekTo(t,true);pl.playVideo();}}
   else{{document.getElementById('yti').src="https://www.youtube.com/embed/{vid_id}?enablejsapi=1&autoplay=1&start="+t+"&rel=0&modestbranding=1";}}
 }}
@@ -798,68 +959,55 @@ function render(){{
   var sf=document.getElementById('sf').value,ff=parseFloat(document.getElementById('ff').value);
   var sl=document.getElementById('sl');sl.innerHTML='';var n=0;
   scenes.forEach(function(s){{
-    if(sf!=='all'&&s.sent!==sf)return;
-    if(parseFloat(s.fit)<ff)return;n++;
+    if(sf!=='all'&&s.sent!==sf)return;if(parseFloat(s.fit)<ff)return;n++;
     var kc=s.is_key?' key':'',ac=s.idx===ai?' active':'',kb=s.is_key?' ⭐':'';
     sl.innerHTML+='<div class="card'+kc+ac+'" id="c'+s.idx+'">'
       +'<div><span class="ts">'+s.start_fmt+' → '+s.end_fmt+'</span> <b style="font-size:12px">'+s.dur+'s'+kb+'</b></div>'
       +'<div class="meta">'+s.sent_icon+' '+s.sent+' · 🛡 '+s.safety+' · ⚡ '+s.eng+'</div>'
       +'<div class="txt">'+s.text+(s.text.length>=200?'…':'')+'</div>'
       +'<div class="iab">'+s.iab+' · ad fit '+s.fit+'</div>'
-      +'<button class="pb" onclick="seek('+s.start+','+s.idx+',\''+s.start_fmt+'\')">▶ Play at '+s.start_fmt+'</button>'
+      +'<button class="pb" onclick="seek('+s.start+','+s.idx+',\''+s.start_fmt+'\')">▶ Play</button>'
       +'</div>';
   }});
   document.getElementById('fc').textContent=n+' scenes';
 }}
 render();
 </script></body></html>"""
-    st.components.v1.html(html, height=580, scrolling=False)
+    st.components.v1.html(html,height=580,scrolling=False)
 
 
-# ── MP4 player with scene sidebar ──────────────────────────────────────────
-def _mp4_player_with_scenes(vm: VideoMetadata):
+# ── MP4 player ──────────────────────────────────────────────────────────────
+def _mp4_player_with_scenes(vm):
     import json
-    b64   = st.session_state.video_b64.get(vm.video_id,"")
-    mime  = st.session_state.video_mime.get(vm.video_id,"video/mp4")
-    sj    = json.dumps([{
-        "idx":i,"start":s.start_sec,"fmt":s.start_fmt,"end_fmt":s.end_fmt,
-        "dur":int(s.duration_sec),
-        "text":s.text[:160].replace('"','').replace("\n"," "),
-        "sent":s.sentiment.get("label","neutral"),
-        "sent_icon":_sent_icon(s.sentiment.get("label","neutral")),
-        "eng":f"{s.engagement_score:.2f}","fit":f"{s.ad_suitability:.2f}",
-        "key":s.scene_id in vm.key_scenes,
+    b64  = st.session_state.video_b64.get(vm.video_id,"")
+    mime = st.session_state.video_mime.get(vm.video_id,"video/mp4")
+    sj   = json.dumps([{"idx":i,"start":s.start_sec,"fmt":s.start_fmt,"end_fmt":s.end_fmt,
+        "dur":int(s.duration_sec),"text":s.text[:160].replace('"','').replace("\n"," "),
+        "sent":s.sentiment.get("label","neutral"),"sent_icon":_sent_icon(s.sentiment.get("label","neutral")),
+        "eng":f"{s.engagement_score:.2f}","fit":f"{s.ad_suitability:.2f}","key":s.scene_id in vm.key_scenes,
     } for i,s in enumerate(vm.scenes)])
-    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+    html=f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
-*{{box-sizing:border-box;margin:0;padding:0;font-family:Inter,sans-serif}}
-body{{background:#fff}}
-#wrap{{display:flex;gap:14px}}
-#pc{{flex:0 0 60%}}
+*{{box-sizing:border-box;margin:0;padding:0;font-family:Inter,sans-serif}}body{{background:#fff}}
+#wrap{{display:flex;gap:14px}}#pc{{flex:0 0 60%}}
 video{{width:100%;border-radius:10px;border:1px solid #e5e7eb;background:#000;display:block}}
 #cb{{margin-top:6px;display:flex;align-items:center;gap:8px}}
-#pbtn{{width:32px;height:32px;border-radius:50%;background:#f59e0b;border:none;
-        cursor:pointer;font-size:12px;color:#111;display:flex;align-items:center;justify-content:center}}
-#pw{{flex:1;height:6px;background:#e5e7eb;border-radius:3px;cursor:pointer;position:relative}}
+#pbtn{{width:32px;height:32px;border-radius:50%;background:#f59e0b;border:none;cursor:pointer;font-size:12px;color:#111;display:flex;align-items:center;justify-content:center}}
+#pw{{flex:1;height:6px;background:#e5e7eb;border-radius:3px;cursor:pointer}}
 #pf{{height:100%;background:#f59e0b;border-radius:3px;width:0%}}
 #td{{font-size:11px;color:#374151;white-space:nowrap;font-variant-numeric:tabular-nums}}
 #sc{{flex:1;height:460px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:10px;padding:8px;background:#fafafa}}
 .card{{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:9px 11px;margin-bottom:7px;cursor:pointer;transition:all .15s}}
-.card:hover{{border-color:#f59e0b}}
-.card.act{{border-color:#f59e0b;background:#fffbeb}}
-.card.key{{border-left:3px solid #f59e0b}}
+.card:hover{{border-color:#f59e0b}}.card.act{{border-color:#f59e0b;background:#fffbeb}}.card.key{{border-left:3px solid #f59e0b}}
 .ts{{font-family:monospace;font-size:11px;color:#6b7280;background:#f3f4f6;padding:1px 5px;border-radius:4px}}
-.txt{{font-size:12px;color:#374151;margin:4px 0 3px;line-height:1.45}}
-.meta{{font-size:10px;color:#9ca3af}}
+.txt{{font-size:12px;color:#374151;margin:4px 0 3px;line-height:1.45}}.meta{{font-size:10px;color:#9ca3af}}
 </style></head><body>
 <div id="wrap">
   <div id="pc">
-    <video id="vid" preload="metadata" playsinline>
-      <source src="data:{mime};base64,{b64}" type="{mime}">
-    </video>
+    <video id="vid" preload="metadata" playsinline><source src="data:{mime};base64,{b64}" type="{mime}"></video>
     <div id="cb">
       <button id="pbtn" onclick="toggle()">▶</button>
-      <div id="pw" onclick="seek_bar(event)"><div id="pf"></div></div>
+      <div id="pw" onclick="sb(event)"><div id="pf"></div></div>
       <span id="td">0:00 / 0:00</span>
     </div>
   </div>
@@ -873,13 +1021,10 @@ VID.addEventListener('timeupdate',function(){{
   document.getElementById('pbtn').textContent=VID.paused?'▶':'⏸';
   var m=Math.floor(t/60),s=Math.floor(t%60),dm=Math.floor(d/60),ds=Math.floor(d%60);
   document.getElementById('td').textContent=m+':'+(s<10?'0':'')+s+' / '+dm+':'+(ds<10?'0':'')+ds;
-  SC.forEach(function(sc){{
-    var el=document.getElementById('c'+sc.idx);
-    if(el)el.classList.toggle('act',t>=sc.start&&t<sc.start+sc.dur);
-  }});
+  SC.forEach(function(sc){{var el=document.getElementById('c'+sc.idx);if(el)el.classList.toggle('act',t>=sc.start&&t<sc.start+sc.dur);}});
 }});
 function toggle(){{VID.paused?VID.play():VID.pause();}}
-function seek_bar(e){{var r=document.getElementById('pw').getBoundingClientRect();VID.currentTime=((e.clientX-r.left)/r.width)*(VID.duration||0);}}
+function sb(e){{var r=document.getElementById('pw').getBoundingClientRect();VID.currentTime=((e.clientX-r.left)/r.width)*(VID.duration||0);}}
 var sl=document.getElementById('sl');
 SC.forEach(function(s){{
   var d=document.createElement('div');d.className='card'+(s.key?' key':'');d.id='c'+s.idx;
@@ -890,423 +1035,290 @@ SC.forEach(function(s){{
   sl.appendChild(d);
 }});
 </script></body></html>"""
-    st.components.v1.html(html, height=500, scrolling=False)
+    st.components.v1.html(html,height=500,scrolling=False)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 3 — MONETISE
-# Ad planning: match ads to scenes, build schedule, preview live
 # ══════════════════════════════════════════════════════════════════════════════
 def page_monetise():
     vm = _active_vm()
     if not vm:
         st.info("No video selected.")
-        if st.button("← Go to Library"): st.session_state.page="library"; st.rerun()
+        if st.button("← Library"): st.session_state.page="library"; st.rerun()
         return
 
     vid_id = vm.video_id
     if vid_id not in st.session_state.ad_markers:
         st.session_state.ad_markers[vid_id] = []
 
-    st.markdown(f"""
-    <div style="padding:4px 0 20px">
-      <div style="font-size:1.8rem;font-weight:800">📢 Monetise · <span style="color:#6b7280;font-weight:500;font-size:1.4rem">{vm.title}</span></div>
-      <div style="color:#6b7280;margin-top:4px">Build your ad schedule · AI-matches ads to scene context · live preview</div>
-    </div>""", unsafe_allow_html=True)
-
-    tab_plan, tab_preview, tab_library = st.tabs([
-        "🗓️  Ad Plan",
-        "▶️  Live Preview",
-        "📦  Ad Library",
-    ])
-
     all_ads_list = BUILTIN_ADS + st.session_state.custom_ads
     ad_opts = [f"{a['emoji']} {a['brand']} — {a['title']}" for a in all_ads_list]
 
-    # ── TAB: AD PLAN ──────────────────────────────────────────────────────
+    st.markdown(f'<div style="font-size:1.8rem;font-weight:800;color:#111827;padding:4px 0 4px">📢 Monetise</div>', unsafe_allow_html=True)
+    st.caption(f"**{vm.title}** · {vm.fmt_duration()} · {vm.scene_count} scenes")
+    st.divider()
+
+    tab_plan, tab_preview, tab_adlib = st.tabs(["🗓️  Ad Plan","▶️  Live Preview","📦  Ad Library"])
+
+    # ── AD PLAN ───────────────────────────────────────────────────────────
     with tab_plan:
-        left, right = st.columns([3, 2], gap="large")
+        left, right = st.columns([3,2], gap="large")
 
         with right:
-            # ── Scene-by-scene ad match ──
             with st.container(border=True):
-                st.markdown("**🤖 AI Ad Suggestions**")
-                st.caption("Top ad match for every scene based on content similarity")
-                for scene in vm.scenes[:8]:
-                    is_key = scene.scene_id in vm.key_scenes
+                st.markdown("**🤖 Scene Match Summary**")
+                for scene in vm.scenes[:7]:
                     ad, sim = _best_ad_for_scene(scene)
+                    is_key = scene.scene_id in vm.key_scenes
                     sc = "#16a34a" if sim["total"]>0.45 else "#f59e0b" if sim["total"]>0.25 else "#9ca3af"
                     bar = int(sim["total"]*100)
                     st.markdown(
-                        f'<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #f3f4f6">'
-                        f'<code style="font-size:11px;color:#374151;min-width:48px">{scene.start_fmt}</code>'
+                        f'<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #f3f4f6">'
+                        f'<code style="font-size:10px;color:#374151;min-width:46px">{scene.start_fmt}</code>'
                         f'{"⭐" if is_key else "  "}'
-                        f'<div style="flex:1">'
-                        f'<div style="font-size:12px;font-weight:600">{ad["emoji"]} {ad["brand"]}</div>'
-                        f'<div style="display:flex;align-items:center;gap:5px;margin-top:2px">'
+                        f'<div style="flex:1"><div style="font-size:12px;font-weight:600">{ad["emoji"]} {ad["brand"]}</div>'
+                        f'<div style="display:flex;align-items:center;gap:4px;margin-top:2px">'
                         f'<div style="flex:1;height:4px;background:#e5e7eb;border-radius:2px">'
                         f'<div style="width:{bar}%;height:4px;background:{sc};border-radius:2px"></div></div>'
-                        f'<span style="font-size:11px;font-weight:700;color:{sc}">{bar}%</span>'
-                        f'</div></div></div>',
-                        unsafe_allow_html=True)
-                if vm.scene_count > 8:
-                    st.caption(f"…and {vm.scene_count-8} more scenes")
+                        f'<span style="font-size:10px;font-weight:700;color:{sc}">{bar}%</span>'
+                        f'</div></div></div>', unsafe_allow_html=True)
 
             st.markdown("")
-
-            # ── Auto-generate ──
             with st.container(border=True):
-                st.markdown("**⚙️ Auto-generate plan**")
-                n_mid = st.slider("Mid-roll ads", 1, min(8,vm.scene_count), min(3,vm.scene_count), key="m_n")
-                strat = st.radio("Strategy", ["🏆 Best similarity","🔀 Even spacing","⭐ Key moments"], key="m_str")
+                st.markdown("**⚙️ Auto-generate**")
+                n_mid  = st.slider("Mid-roll count", 1, min(8,vm.scene_count), min(3,vm.scene_count), key="m_n")
+                strat  = st.radio("Strategy",["🏆 Best similarity","🔀 Even spacing","⭐ Key moments","🎯 Top opportunities"], key="m_str")
                 if st.button("Generate Plan →", type="primary", key="m_gen"):
                     scenes = vm.scenes
+                    def opp(s): return s.engagement_score*s.ad_suitability*s.brand_safety.get("safety_score",1)
                     if "similarity" in strat:
-                        cands = sorted(scenes, key=lambda s: _best_ad_for_scene(s)[1]["total"]*s.ad_suitability, reverse=True)[:n_mid]
+                        cands = sorted(scenes,key=lambda s:_best_ad_for_scene(s)[1]["total"]*s.ad_suitability,reverse=True)[:n_mid]
                     elif "Even" in strat:
-                        step = max(1, len(scenes)//(n_mid+1))
-                        cands = [scenes[i*step] for i in range(1,n_mid+1) if i*step<len(scenes)]
-                    else:
-                        cands = [s for s in scenes if s.scene_id in vm.key_scenes][:n_mid] or \
-                                sorted(scenes, key=lambda s: s.engagement_score, reverse=True)[:n_mid]
-                    new_markers = []
-                    ad0, sim0 = _best_ad_for_scene(scenes[0])
-                    new_markers.append({"sec":0,"fmt":"00:00:00","ad":ad0,"mode":"auto",
-                        "duration":15,"sim":sim0["total"],
-                        "reason":f"Pre-roll · {sim0['total']:.0%} match"})
+                        step=max(1,len(scenes)//(n_mid+1))
+                        cands=[scenes[i*step] for i in range(1,n_mid+1) if i*step<len(scenes)]
+                    elif "Key" in strat:
+                        cands=[s for s in scenes if s.scene_id in vm.key_scenes][:n_mid] or sorted(scenes,key=lambda s:s.engagement_score,reverse=True)[:n_mid]
+                    else:  # Top opportunities
+                        cands = sorted(scenes,key=opp,reverse=True)[:n_mid]
+                    new_markers=[]
+                    ad0,sim0=_best_ad_for_scene(scenes[0])
+                    new_markers.append({"sec":0,"fmt":"00:00:00","ad":ad0,"mode":"auto","duration":15,"sim":sim0["total"],"reason":f"Pre-roll · {sim0['total']:.0%}"})
                     for sc2 in cands:
-                        ad, sim = _best_ad_for_scene(sc2)
-                        reason = _iab_str(sc2.iab_categories) + f" · {sim['total']:.0%}" + (" · ⭐" if sc2.scene_id in vm.key_scenes else "")
-                        new_markers.append({"sec":sc2.start_sec,"fmt":_fmt_sec(sc2.start_sec),
-                            "ad":ad,"mode":"auto","duration":15,"sim":sim["total"],"reason":reason})
-                    st.session_state.ad_markers[vid_id] = new_markers
-                    st.success(f"✅ {len(new_markers)} markers created"); st.rerun()
+                        ad,sim=_best_ad_for_scene(sc2)
+                        reason=_iab_str(sc2.iab_categories)+f" · {sim['total']:.0%}"+(" · ⭐" if sc2.scene_id in vm.key_scenes else "")
+                        new_markers.append({"sec":sc2.start_sec,"fmt":_fmt_sec(sc2.start_sec),"ad":ad,"mode":"auto","duration":15,"sim":sim["total"],"reason":reason})
+                    st.session_state.ad_markers[vid_id]=new_markers
+                    st.success(f"✅ {len(new_markers)} markers"); st.rerun()
 
-            # ── Manual add ──
             with st.container(border=True):
-                st.markdown("**✋ Add manually**")
-                new_ts  = st.text_input("Timestamp", placeholder="00:01:30", key="m_mts")
-                ad_pick = st.selectbox("Ad", ad_opts, key="m_mad")
-                dur_p   = st.number_input("Duration (s)", 5, 60, 15, key="m_dur_new")
-                if st.button("➕ Add Marker", key="m_madd"):
-                    sec = _parse_ts(new_ts)
+                st.markdown("**✋ Manual add**")
+                new_ts  = st.text_input("Timestamp",placeholder="00:01:30",key="m_mts")
+                ad_pick = st.selectbox("Ad",ad_opts,key="m_mad")
+                dur_p   = st.number_input("Duration (s)",5,60,15,key="m_dur_new")
+                if st.button("➕ Add",key="m_madd"):
+                    sec=_parse_ts(new_ts)
                     if sec is not None:
                         if sec not in [m["sec"] for m in st.session_state.ad_markers[vid_id]]:
-                            ad_obj = all_ads_list[ad_opts.index(ad_pick)]
-                            closest = min(vm.scenes, key=lambda s: abs(s.start_sec-sec))
-                            sim = _ad_similarity(ad_obj, closest)
-                            st.session_state.ad_markers[vid_id].append({
-                                "sec":sec,"fmt":_fmt_sec(sec),"ad":ad_obj,"mode":"manual",
-                                "duration":int(dur_p),"sim":sim["total"],"reason":"Manual"})
+                            ad_obj=all_ads_list[ad_opts.index(ad_pick)]
+                            closest=min(vm.scenes,key=lambda s:abs(s.start_sec-sec))
+                            sim=_ad_similarity(ad_obj,closest)
+                            st.session_state.ad_markers[vid_id].append({"sec":sec,"fmt":_fmt_sec(sec),"ad":ad_obj,"mode":"manual","duration":int(dur_p),"sim":sim["total"],"reason":"Manual"})
                         st.rerun()
                     else: st.error("Invalid timestamp")
 
         with left:
-            markers = st.session_state.ad_markers[vid_id]
+            markers=st.session_state.ad_markers[vid_id]
             if not markers:
-                st.markdown("""
-                <div style="text-align:center;padding:48px 24px;color:#9ca3af;border:2px dashed #e5e7eb;border-radius:12px">
-                  <div style="font-size:2rem">📋</div>
-                  <div style="font-weight:600;margin-top:8px">No ad markers yet</div>
-                  <div style="font-size:13px;margin-top:4px">Use auto-generate or add manually →</div>
-                </div>""", unsafe_allow_html=True)
+                st.markdown('<div style="text-align:center;padding:48px 24px;color:#9ca3af;border:2px dashed #e5e7eb;border-radius:12px"><div style="font-size:2rem">📋</div><div style="font-weight:600;margin-top:8px">No markers yet</div><div style="font-size:13px;margin-top:4px">Auto-generate or add manually →</div></div>', unsafe_allow_html=True)
             else:
-                sorted_m = sorted(markers, key=lambda x: x["sec"])
-                post_ad, post_sim_d = _best_ad_for_scene(vm.scenes[-1])
-                avg_sim = sum(m["sim"] for m in markers)/len(markers)
-
-                # Summary metrics
-                c1,c2,c3,c4 = st.columns(4)
+                sorted_m=sorted(markers,key=lambda x:x["sec"])
+                avg_sim=sum(m["sim"] for m in markers)/len(markers)
+                c1,c2,c3,c4=st.columns(4)
                 c1.metric("Pre-roll",  sum(1 for m in markers if m["sec"]==0))
                 c2.metric("Mid-roll",  sum(1 for m in markers if m["sec"]>0))
                 c3.metric("Post-roll", 1)
                 c4.metric("Avg match", f"{avg_sim:.0%}")
 
-                st.markdown("**Edit your ad schedule** — change any ad, timestamp or duration, then save")
-
-                for i, m in enumerate(sorted_m):
-                    tl = "🟡 Pre-roll" if m["sec"]==0 else "🔴 Mid-roll"
-                    sc = "#16a34a" if m["sim"]>0.45 else "#f59e0b" if m["sim"]>0.25 else "#9ca3af"
+                for i,m in enumerate(sorted_m):
+                    tl="🟡 Pre-roll" if m["sec"]==0 else "🔴 Mid-roll"
+                    sc="#16a34a" if m["sim"]>0.45 else "#f59e0b" if m["sim"]>0.25 else "#9ca3af"
                     with st.container(border=True):
-                        h1, h2 = st.columns([4,2])
+                        h1,h2=st.columns([4,2])
                         with h1:
                             st.markdown(f"**{tl}** · {'🤖' if m['mode']=='auto' else '✋'}")
-                            st.text_input("Time", value=m["fmt"], key=f"mt_{i}")
+                            st.text_input("Time",value=m["fmt"],key=f"mt_{i}")
                         with h2:
-                            st.markdown(
-                                f'<div style="padding-top:28px;text-align:right">'
-                                f'<span style="font-size:20px;font-weight:800;color:{sc}">🎯 {m["sim"]:.0%}</span><br>'
-                                f'<span style="font-size:10px;color:#9ca3af">similarity</span></div>',
-                                unsafe_allow_html=True)
-                        cur_lbl = f"{m['ad']['emoji']} {m['ad']['brand']} — {m['ad']['title']}"
-                        cur_idx = ad_opts.index(cur_lbl) if cur_lbl in ad_opts else 0
-                        st.selectbox("Ad", ad_opts, index=cur_idx, key=f"ma_{i}")
-                        dc,rc = st.columns([4,1])
-                        dc.slider("Duration (s)", 5, 60, int(m.get("duration",15)), key=f"md_{i}")
-                        if rc.button("🗑", key=f"mD_{i}"):
-                            st.session_state.ad_markers[vid_id] = [x for x in markers if x["sec"]!=m["sec"]]
-                            st.rerun()
+                            st.markdown(f'<div style="padding-top:28px;text-align:right"><span style="font-size:20px;font-weight:800;color:{sc}">🎯 {m["sim"]:.0%}</span><br><span style="font-size:10px;color:#9ca3af">similarity</span></div>', unsafe_allow_html=True)
+                        cur_lbl=f"{m['ad']['emoji']} {m['ad']['brand']} — {m['ad']['title']}"
+                        cur_idx=ad_opts.index(cur_lbl) if cur_lbl in ad_opts else 0
+                        st.selectbox("Ad",ad_opts,index=cur_idx,key=f"ma_{i}")
+                        dc,rc=st.columns([4,1])
+                        dc.slider("Duration (s)",5,60,int(m.get("duration",15)),key=f"md_{i}")
+                        if rc.button("🗑",key=f"mD_{i}"):
+                            st.session_state.ad_markers[vid_id]=[x for x in markers if x["sec"]!=m["sec"]]; st.rerun()
                         st.caption(m.get("reason",""))
 
-                if st.button("💾 Save Schedule →", type="primary", key="m_save"):
-                    saved = []
-                    for i, m in enumerate(sorted_m):
-                        raw_ts  = st.session_state.get(f"mt_{i}", m["fmt"])
-                        new_sec = _parse_ts(raw_ts) or m["sec"]
-                        ad_lbl  = st.session_state.get(f"ma_{i}", f"{m['ad']['emoji']} {m['ad']['brand']} — {m['ad']['title']}")
-                        new_ad  = all_ads_list[ad_opts.index(ad_lbl)] if ad_lbl in ad_opts else m["ad"]
-                        new_dur = int(st.session_state.get(f"md_{i}", m.get("duration",15)))
-                        closest = min(vm.scenes, key=lambda s: abs(s.start_sec-new_sec))
-                        new_sim = _ad_similarity(new_ad, closest)["total"]
-                        saved.append({**m,"sec":new_sec,"fmt":_fmt_sec(new_sec),
-                                      "ad":new_ad,"duration":new_dur,"sim":new_sim})
-                    st.session_state.ad_markers[vid_id] = saved
-                    st.success("✅ Saved — switch to **Live Preview** tab")
+                if st.button("💾 Save & Preview →", type="primary", key="m_save"):
+                    saved=[]
+                    for i,m in enumerate(sorted_m):
+                        raw_ts=st.session_state.get(f"mt_{i}",m["fmt"])
+                        new_sec=_parse_ts(raw_ts) or m["sec"]
+                        ad_lbl=st.session_state.get(f"ma_{i}",f"{m['ad']['emoji']} {m['ad']['brand']} — {m['ad']['title']}")
+                        new_ad=all_ads_list[ad_opts.index(ad_lbl)] if ad_lbl in ad_opts else m["ad"]
+                        new_dur=int(st.session_state.get(f"md_{i}",m.get("duration",15)))
+                        closest=min(vm.scenes,key=lambda s:abs(s.start_sec-new_sec))
+                        new_sim=_ad_similarity(new_ad,closest)["total"]
+                        saved.append({**m,"sec":new_sec,"fmt":_fmt_sec(new_sec),"ad":new_ad,"duration":new_dur,"sim":new_sim})
+                    st.session_state.ad_markers[vid_id]=saved
+                    st.success("✅ Saved — switch to Live Preview tab ▶️")
 
-    # ── TAB: LIVE PREVIEW ─────────────────────────────────────────────────
+    # ── LIVE PREVIEW ──────────────────────────────────────────────────────
     with tab_preview:
-        markers = st.session_state.ad_markers[vid_id]
-        has_mp4 = vid_id in st.session_state.video_b64
-        yt_id   = getattr(vm, "yt_id", None)
-
+        markers=st.session_state.ad_markers[vid_id]
+        has_mp4=vid_id in st.session_state.video_b64
+        yt_id=getattr(vm,"yt_id",None)
         if not markers:
-            st.info("Build an ad plan first in the **Ad Plan** tab.")
-            return
-
-        if not has_mp4 and not yt_id:
-            st.warning("No playable video — upload an MP4 in Library to use the live preview.")
-            # Show schedule table anyway
+            st.info("Build an ad plan first."); 
+        elif not has_mp4 and not yt_id:
+            st.warning("No playable video — upload an MP4 in Library.")
         else:
-            post_ad, post_sim_d = _best_ad_for_scene(vm.scenes[-1])
-            post_sim = post_sim_d["total"]
-            sorted_m = sorted(markers, key=lambda x: x["sec"])
-
-            c1,c2,c3,c4,c5 = st.columns(5)
-            c1.metric("Pre-roll",  sum(1 for m in markers if m["sec"]==0))
-            c2.metric("Mid-roll",  sum(1 for m in markers if m["sec"]>0))
-            c3.metric("Post-roll", 1)
-            c4.metric("Avg match", f"{sum(m['sim'] for m in markers)/max(len(markers),1):.0%}")
-            c5.metric("Total ads", len(sorted_m)+1)
-
+            sorted_m=sorted(markers,key=lambda x:x["sec"])
+            post_ad,post_sim_d=_best_ad_for_scene(vm.scenes[-1])
+            c1,c2,c3,c4,c5=st.columns(5)
+            c1.metric("Pre-roll",sum(1 for m in markers if m["sec"]==0))
+            c2.metric("Mid-roll",sum(1 for m in markers if m["sec"]>0))
+            c3.metric("Post-roll",1)
+            c4.metric("Avg match",f"{sum(m['sim'] for m in markers)/max(len(markers),1):.0%}")
+            c5.metric("Total ads",len(sorted_m)+1)
             if has_mp4:
-                _monetise_player(vm, sorted_m)
+                _monetise_player(vm,sorted_m)
             else:
-                # YouTube - show schedule only, can't inject ads into YT
-                st.info("ℹ️ Live ad injection requires an uploaded MP4. For YouTube videos, the ad schedule below shows recommended placement.")
-
-        # Ad schedule table
+                st.info("ℹ️ Live ad injection works with uploaded MP4. For YouTube, see the schedule below.")
+        # Schedule table
         st.divider()
-        st.markdown("**📋 Full Ad Schedule**")
-        sorted_m2 = sorted(markers, key=lambda x: x["sec"])
-        post_ad2, post_sim_d2 = _best_ad_for_scene(vm.scenes[-1])
-        rows = []
+        sorted_m2=sorted(markers,key=lambda x:x["sec"]) if markers else []
+        post_ad2,post_sim_d2=_best_ad_for_scene(vm.scenes[-1])
+        rows=[]
         for m in sorted_m2:
-            closest = min(vm.scenes, key=lambda s: abs(s.start_sec-m["sec"]))
-            sd = _ad_similarity(m["ad"], closest)
-            rows.append({
-                "Time":      "Pre-roll" if m["sec"]==0 else m["fmt"],
-                "Type":      "pre-roll" if m["sec"]==0 else "mid-roll",
-                "By":        "🤖 AI" if m.get("mode")=="auto" else "✋ Manual",
-                "Brand":     m["ad"]["brand"], "Ad": m["ad"]["title"],
-                "🎯 Match":  f"{m['sim']:.0%}",
-                "IAB":       f"{sd['iab']:.0%}", "Text": f"{sd['text']:.0%}",
-                "Duration":  f"{m.get('duration',15)}s",
-                "Matched on":  ", ".join(sd["matched_iab"][:3]) or "—",
-            })
-        rows.append({"Time":"Post-roll","Type":"post-roll","By":"🤖 AI",
-            "Brand":post_ad2["brand"],"Ad":post_ad2["title"],
-            "🎯 Match":f"{post_sim_d2['total']:.0%}",
-            "IAB":f"{post_sim_d2['iab']:.0%}","Text":f"{post_sim_d2['text']:.0%}",
-            "Duration":"15s","Matched on":", ".join(post_sim_d2["matched_iab"][:3]) or "—"})
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            cl=min(vm.scenes,key=lambda s:abs(s.start_sec-m["sec"]))
+            sd=_ad_similarity(m["ad"],cl)
+            rows.append({"Time":"Pre-roll" if m["sec"]==0 else m["fmt"],"Type":"pre-roll" if m["sec"]==0 else "mid-roll","By":"🤖 AI" if m.get("mode")=="auto" else "✋ Manual","Brand":m["ad"]["brand"],"Ad":m["ad"]["title"],"🎯 Match":f"{m['sim']:.0%}","IAB":f"{sd['iab']:.0%}","Text":f"{sd['text']:.0%}","Dur":f"{m.get('duration',15)}s","Matched":  ", ".join(sd["matched_iab"][:3]) or "—"})
+        rows.append({"Time":"Post-roll","Type":"post-roll","By":"🤖 AI","Brand":post_ad2["brand"],"Ad":post_ad2["title"],"🎯 Match":f"{post_sim_d2['total']:.0%}","IAB":f"{post_sim_d2['iab']:.0%}","Text":f"{post_sim_d2['text']:.0%}","Dur":"15s","Matched":", ".join(post_sim_d2["matched_iab"][:3]) or "—"})
+        if rows: st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
 
-    # ── TAB: AD LIBRARY ───────────────────────────────────────────────────
-    with tab_library:
+    # ── AD LIBRARY ────────────────────────────────────────────────────────
+    with tab_adlib:
         st.markdown("#### Built-in Ads")
-        cols = st.columns(4)
-        for i, ad in enumerate(BUILTIN_ADS):
+        cols=st.columns(4)
+        for i,ad in enumerate(BUILTIN_ADS):
             with cols[i%4]:
                 with st.container(border=True):
                     st.markdown(f"{ad['emoji']} **{ad['brand']}**")
                     st.caption(ad["title"])
-                    tags_p = " · ".join(ad["tags"].split()[:5])
-                    st.caption(f"🏷️ {tags_p}")
+                    st.caption("🏷️ "+" · ".join(ad["tags"].split()[:5]))
 
         st.divider()
         st.markdown("#### ➕ Add Custom Ad")
-
-        # Video tag hint
         if vm.dominant_iab:
-            hint = " · ".join(c["name"] for c in vm.dominant_iab[:5])
-            st.info(f"💡 **This video's tags:** {hint}  — use similar words for best matching")
-
+            st.info(f"💡 **Video tags to target:** {' · '.join(c['name'] for c in vm.dominant_iab[:5])}")
         with st.container(border=True):
-            ua, ub = st.columns(2)
+            ua,ub=st.columns(2)
             with ua:
-                c_brand    = st.text_input("Brand", key="ca_brand")
-                c_title    = st.text_input("Title", key="ca_title")
-                c_headline = st.text_input("Headline", key="ca_hl")
-                c_body     = st.text_area("Body copy", key="ca_body", height=70)
-                c_cta      = st.text_input("CTA", value="Learn More", key="ca_cta")
-                c_emoji    = st.text_input("Emoji", value="📣", key="ca_emoji")
+                c_brand=st.text_input("Brand",key="ca_brand"); c_title=st.text_input("Title",key="ca_title")
+                c_hl=st.text_input("Headline",key="ca_hl"); c_body=st.text_area("Body",key="ca_body",height=70)
+                c_cta=st.text_input("CTA","Learn More",key="ca_cta"); c_em=st.text_input("Emoji","📣",key="ca_emoji")
             with ub:
-                st.markdown("**Content tags**")
-                st.caption("Match these against scene IAB tags. Same words = higher similarity.")
-                c_tags = st.text_area("Tags", key="ca_tags", height=90,
-                    placeholder="e.g. arts entertainment, family parenting, news")
-                # Live match preview
+                st.markdown("**🏷️ Tags** *(match these to scene IAB categories)*")
+                c_tags=st.text_area("Tags",key="ca_tags",height=90,placeholder="arts entertainment, family parenting, news")
                 if c_tags.strip():
-                    dummy = {"tags":c_tags,"id":"preview"}
-                    scores = sorted([(s, _ad_similarity(dummy,s)["total"]) for s in vm.scenes],
-                                    key=lambda x: x[1], reverse=True)[:3]
-                    if scores[0][1] > 0:
-                        st.markdown("**Live match preview:**")
-                        for sc2, sim in scores:
-                            bar_w = int(sim*100)
-                            c = "#16a34a" if sim>0.45 else "#f59e0b" if sim>0.25 else "#9ca3af"
-                            st.markdown(
-                                f'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0">'
-                                f'<code>{sc2.start_fmt}</code>'
-                                f'<div style="flex:1;height:5px;background:#e5e7eb;border-radius:3px">'
-                                f'<div style="width:{bar_w}%;height:5px;background:{c};border-radius:3px"></div></div>'
-                                f'<b style="color:{c}">{sim:.0%}</b></div>',
-                                unsafe_allow_html=True)
-                c1 = st.color_picker("Gradient start", "#6366f1", key="ca_c1")
-                c2 = st.color_picker("Gradient end",   "#8b5cf6", key="ca_c2")
-
-            if st.button("➕ Add to Library", type="primary", key="ca_add"):
+                    dummy={"tags":c_tags,"id":"preview"}
+                    scores=sorted([(s,_ad_similarity(dummy,s)["total"]) for s in vm.scenes],key=lambda x:x[1],reverse=True)[:3]
+                    if scores[0][1]>0:
+                        st.markdown("**Live preview:**")
+                        for sc2,sim in scores:
+                            bar_w=int(sim*100);c="#16a34a" if sim>0.45 else "#f59e0b" if sim>0.25 else "#9ca3af"
+                            st.markdown(f'<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin:3px 0"><code>{sc2.start_fmt}</code><div style="flex:1;height:5px;background:#e5e7eb;border-radius:3px"><div style="width:{bar_w}%;height:5px;background:{c};border-radius:3px"></div></div><b style="color:{c}">{sim:.0%}</b></div>',unsafe_allow_html=True)
+                c1_=st.color_picker("Gradient start","#6366f1",key="ca_c1"); c2_=st.color_picker("Gradient end","#8b5cf6",key="ca_c2")
+            if st.button("➕ Add to Library",type="primary",key="ca_add"):
                 if c_brand and c_title and c_tags.strip():
-                    st.session_state.custom_ads.append({
-                        "id":f"custom_{len(st.session_state.custom_ads)+1}",
-                        "brand":c_brand,"title":c_title,"headline":c_headline or c_title,
-                        "body":c_body or f"{c_brand} — {c_title}","cta":c_cta,"emoji":c_emoji,
-                        "bg":f"linear-gradient(135deg,{c1},{c2})","tags":c_tags,
-                    })
-                    st.success(f"✅ Added {c_brand} — regenerate plan to include it")
-                    st.rerun()
+                    st.session_state.custom_ads.append({"id":f"custom_{len(st.session_state.custom_ads)+1}","brand":c_brand,"title":c_title,"headline":c_hl or c_title,"body":c_body or f"{c_brand} — {c_title}","cta":c_cta,"emoji":c_em,"bg":f"linear-gradient(135deg,{c1_},{c2_})","tags":c_tags})
+                    st.success(f"✅ Added {c_brand}"); st.rerun()
                 else: st.error("Brand, title and tags required")
-
         if st.session_state.custom_ads:
-            st.divider()
-            st.markdown("#### Your Custom Ads")
-            for i, ad in enumerate(st.session_state.custom_ads):
-                top_sc = max(vm.scenes, key=lambda s: _ad_similarity(ad,s)["total"])
-                top_sim = _ad_similarity(ad, top_sc)
-                sc = "#16a34a" if top_sim["total"]>0.45 else "#f59e0b" if top_sim["total"]>0.25 else "#9ca3af"
+            st.divider(); st.markdown("#### Your Custom Ads")
+            for i,ad in enumerate(st.session_state.custom_ads):
+                top_sc=max(vm.scenes,key=lambda s:_ad_similarity(ad,s)["total"])
+                top_sim=_ad_similarity(ad,top_sc)
+                sc="#16a34a" if top_sim["total"]>0.45 else "#f59e0b" if top_sim["total"]>0.25 else "#9ca3af"
                 with st.container(border=True):
-                    c1,c2,c3 = st.columns([2,5,1])
-                    c1.markdown(f"{ad['emoji']} **{ad['brand']}** — {ad['title']}")
-                    c2.markdown(f'Best match: `{top_sc.start_fmt}` — <span style="color:{sc};font-weight:700">{top_sim["total"]:.0%}</span> · matched: {", ".join(top_sim["matched_iab"][:3]) or "none"}', unsafe_allow_html=True)
-                    if c3.button("🗑", key=f"dca_{i}"):
-                        st.session_state.custom_ads.pop(i); st.rerun()
+                    c1_,c2_,c3_=st.columns([2,5,1])
+                    c1_.markdown(f"{ad['emoji']} **{ad['brand']}** — {ad['title']}")
+                    c2_.markdown(f'Best: `{top_sc.start_fmt}` — <span style="color:{sc};font-weight:700">{top_sim["total"]:.0%}</span> · {", ".join(top_sim["matched_iab"][:3]) or "no IAB overlap"}',unsafe_allow_html=True)
+                    if c3_.button("🗑",key=f"dca_{i}"): st.session_state.custom_ads.pop(i); st.rerun()
 
 
-# ── Monetise live player ────────────────────────────────────────────────────
-def _monetise_player(vm: VideoMetadata, markers: list):
-    vid_id = vm.video_id
-    b64    = st.session_state.video_b64.get(vid_id,"")
-    mime   = st.session_state.video_mime.get(vid_id,"video/mp4")
-    post_ad, post_sim_d = _best_ad_for_scene(vm.scenes[-1])
-
-    mjs = _json.dumps([{
-        "sec":m["sec"],"fmt":m["fmt"],
-        "type":"pre-roll" if m["sec"]==0 else "mid-roll",
-        "mode":m.get("mode","manual"),"sim":round(m.get("sim",0),3),
-        "duration":m.get("duration",15),"reason":m.get("reason",""),
-        "ad_brand":m["ad"]["brand"],"ad_title":m["ad"]["title"],
-        "ad_headline":m["ad"]["headline"],"ad_body":m["ad"]["body"],
-        "ad_cta":m["ad"]["cta"],"ad_emoji":m["ad"]["emoji"],"ad_bg":m["ad"]["bg"],
-    } for m in markers])
-    pjs = _json.dumps({"sec":-1,"fmt":"end","type":"post-roll","mode":"auto",
-        "sim":round(post_sim_d["total"],3),"duration":15,"reason":"Best match for final scene",
-        "ad_brand":post_ad["brand"],"ad_title":post_ad["title"],
-        "ad_headline":post_ad["headline"],"ad_body":post_ad["body"],
-        "ad_cta":post_ad["cta"],"ad_emoji":post_ad["emoji"],"ad_bg":post_ad["bg"]})
-    sjs = _json.dumps([{"sec":s.start_sec,"fmt":s.start_fmt,"key":s.scene_id in vm.key_scenes,
-        "label":s.text[:30].replace('"','')} for s in vm.scenes])
-
-    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
+# ── Live ad player ──────────────────────────────────────────────────────────
+def _monetise_player(vm, markers):
+    vid_id=vm.video_id
+    b64=st.session_state.video_b64.get(vid_id,"")
+    mime=st.session_state.video_mime.get(vid_id,"video/mp4")
+    post_ad,post_sim_d=_best_ad_for_scene(vm.scenes[-1])
+    mjs=_json.dumps([{"sec":m["sec"],"fmt":m["fmt"],"type":"pre-roll" if m["sec"]==0 else "mid-roll","mode":m.get("mode","manual"),"sim":round(m.get("sim",0),3),"duration":m.get("duration",15),"reason":m.get("reason",""),"ad_brand":m["ad"]["brand"],"ad_title":m["ad"]["title"],"ad_headline":m["ad"]["headline"],"ad_body":m["ad"]["body"],"ad_cta":m["ad"]["cta"],"ad_emoji":m["ad"]["emoji"],"ad_bg":m["ad"]["bg"]} for m in markers])
+    pjs=_json.dumps({"sec":-1,"fmt":"end","type":"post-roll","mode":"auto","sim":round(post_sim_d["total"],3),"duration":15,"reason":"Best match for final scene","ad_brand":post_ad["brand"],"ad_title":post_ad["title"],"ad_headline":post_ad["headline"],"ad_body":post_ad["body"],"ad_cta":post_ad["cta"],"ad_emoji":post_ad["emoji"],"ad_bg":post_ad["bg"]})
+    sjs=_json.dumps([{"sec":s.start_sec,"fmt":s.start_fmt,"key":s.scene_id in vm.key_scenes,"label":s.text[:28].replace('"','')} for s in vm.scenes])
+    html=f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
 *{{box-sizing:border-box;margin:0;padding:0;font-family:Inter,sans-serif}}
 body{{background:#f9fafb;padding:8px}}
-#wrap{{background:#fff;border-radius:14px;border:1px solid #e5e7eb;
-       box-shadow:0 4px 20px rgba(0,0,0,.08);overflow:hidden}}
+#wrap{{background:#fff;border-radius:14px;border:1px solid #e5e7eb;box-shadow:0 4px 20px rgba(0,0,0,.08);overflow:hidden}}
 #vw{{position:relative;background:#000;aspect-ratio:16/9;max-height:440px}}
 video{{width:100%;height:100%;display:block;object-fit:contain}}
-/* Ad overlay */
-#ov{{display:none;position:absolute;inset:0;z-index:30;background:rgba(0,0,0,.82);
-      align-items:center;justify-content:center}}
-#ac{{width:min(92%,520px);border-radius:20px;padding:28px 34px;color:#fff;
-      text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5);position:relative}}
-.b{{position:absolute;padding:4px 11px;border-radius:10px;font-size:10px;font-weight:700;
-     text-transform:uppercase;letter-spacing:.1em;background:rgba(0,0,0,.4)}}
-#bt{{top:13px;left:13px}} #bm{{top:13px;left:105px}} #bs{{top:13px;right:13px;cursor:pointer}}
-#bsim{{bottom:13px;right:13px;font-size:11px;background:rgba(0,0,0,.35)}}
+#ov{{display:none;position:absolute;inset:0;z-index:30;background:rgba(0,0,0,.82);align-items:center;justify-content:center}}
+#ac{{width:min(92%,520px);border-radius:20px;padding:28px 34px;color:#fff;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5);position:relative}}
+.b{{position:absolute;padding:4px 11px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;background:rgba(0,0,0,.4)}}
+#bt{{top:13px;left:13px}}#bm{{top:13px;left:105px}}#bs{{top:13px;right:13px;cursor:pointer}}#bsim{{bottom:13px;right:13px;background:rgba(0,0,0,.35)}}
 #acd{{font-size:13px;opacity:.7;margin-top:12px;margin-bottom:8px}}
-#aem{{font-size:3.2rem;margin-bottom:5px}}
-#abr{{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;opacity:.75;margin-bottom:3px}}
-#ahl{{font-size:22px;font-weight:800;line-height:1.2;margin-bottom:8px}}
-#abo{{font-size:14px;opacity:.88;line-height:1.55;margin-bottom:20px}}
-#act{{display:inline-block;background:rgba(255,255,255,.18);border:2px solid rgba(255,255,255,.5);
-       color:#fff;padding:10px 28px;border-radius:30px;font-weight:700;cursor:pointer;font-size:14px}}
-#act:hover{{background:rgba(255,255,255,.32)}}
-#are{{font-size:11px;opacity:.6;margin-top:12px}}
-/* Controls */
+#aem{{font-size:3.2rem;margin-bottom:5px}}#abr{{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;opacity:.75;margin-bottom:3px}}
+#ahl{{font-size:22px;font-weight:800;line-height:1.2;margin-bottom:8px}}#abo{{font-size:14px;opacity:.88;line-height:1.55;margin-bottom:20px}}
+#act{{display:inline-block;background:rgba(255,255,255,.18);border:2px solid rgba(255,255,255,.5);color:#fff;padding:10px 28px;border-radius:30px;font-weight:700;cursor:pointer;font-size:14px}}
+#act:hover{{background:rgba(255,255,255,.32)}}#are{{font-size:11px;opacity:.6;margin-top:12px}}
 #cb{{padding:10px 14px 5px;background:#fff;border-top:1px solid #f3f4f6}}
 #pw{{position:relative;height:8px;background:#e5e7eb;border-radius:4px;cursor:pointer;margin-bottom:9px}}
 #pf{{height:100%;background:#f59e0b;border-radius:4px;width:0%;pointer-events:none}}
-.pm{{position:absolute;top:-5px;width:18px;height:18px;border-radius:50%;border:2px solid #fff;
-      transform:translateX(-50%);cursor:pointer;z-index:5;box-shadow:0 2px 5px rgba(0,0,0,.2);transition:transform .12s}}
-.pm:hover{{transform:translateX(-50%) scale(1.5)}}
+.pm{{position:absolute;top:-5px;width:18px;height:18px;border-radius:50%;border:2px solid #fff;transform:translateX(-50%);cursor:pointer;z-index:5;box-shadow:0 2px 5px rgba(0,0,0,.2);transition:transform .12s}}
+.pm:hover{transform:translateX(-50%) scale(1.5)}
 .pml{{position:absolute;top:16px;transform:translateX(-50%);font-size:9px;white-space:nowrap;font-weight:600;pointer-events:none}}
 #ctrl{{display:flex;align-items:center;gap:10px}}
-#pb{{width:36px;height:36px;border-radius:50%;background:#f59e0b;border:none;cursor:pointer;
-      font-size:14px;color:#111;display:flex;align-items:center;justify-content:center;
-      box-shadow:0 2px 8px rgba(245,158,11,.35);flex-shrink:0}}
-#td{{font-size:12px;color:#374151;font-variant-numeric:tabular-nums}}
-#vol{{display:flex;align-items:center;gap:6px;margin-left:auto}}
-#vol input{{width:70px;accent-color:#f59e0b}} #vi{{cursor:pointer;font-size:14px}}
+#pb{{width:36px;height:36px;border-radius:50%;background:#f59e0b;border:none;cursor:pointer;font-size:14px;color:#111;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(245,158,11,.35);flex-shrink:0}}
+#td{{font-size:12px;color:#374151;font-variant-numeric:tabular-nums}}#vol{{display:flex;align-items:center;gap:6px;margin-left:auto}}
+#vol input{{width:70px;accent-color:#f59e0b}}#vi{{cursor:pointer;font-size:14px}}
 #sb{{padding:4px 14px 7px;font-size:11px;color:#9ca3af;background:#fff}}
 #sp{{border-top:1px solid #f3f4f6;padding:8px 14px 10px;background:#fafafa}}
-#sp-hd{{font-size:11px;font-weight:600;color:#374151;margin-bottom:6px}}
-#sp-list{{display:flex;flex-wrap:wrap;gap:5px}}
-.chip{{padding:3px 9px;border-radius:12px;font-size:11px;font-weight:500;cursor:pointer;
-        border:1px solid #e5e7eb;background:#fff;color:#374151;white-space:nowrap;transition:all .1s}}
-.chip:hover,.chip.act{{background:#fff7ed;border-color:#f59e0b;color:#92400e}}
-.chip.key{{border-left:3px solid #f59e0b}}
-.chip.adchip{{background:#fef3c7;border-color:#fcd34d;color:#92400e;font-weight:600}}
+#sp-hd{{font-size:11px;font-weight:600;color:#374151;margin-bottom:6px}}#sp-list{{display:flex;flex-wrap:wrap;gap:5px}}
+.chip{{padding:3px 9px;border-radius:12px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid #e5e7eb;background:#fff;color:#374151;white-space:nowrap;transition:all .1s}}
+.chip:hover,.chip.act{{background:#fff7ed;border-color:#f59e0b;color:#92400e}}.chip.key{{border-left:3px solid #f59e0b}}.chip.adchip{{background:#fef3c7;border-color:#fcd34d;color:#92400e;font-weight:600}}
 </style></head><body>
 <div id="wrap">
   <div id="vw">
-    <video id="vid" preload="auto" playsinline>
-      <source src="data:{mime};base64,{b64}" type="{mime}">
-    </video>
-    <div id="ov">
-      <div id="ac">
-        <div class="b" id="bt">mid-roll</div><div class="b" id="bm">🤖 auto</div>
-        <div class="b" id="bs" onclick="skip()">✕ Skip</div>
-        <div class="b" id="bsim">🎯 —%</div>
-        <div id="acd"></div><div id="aem">🎬</div><div id="abr">Brand</div>
-        <div id="ahl">Headline</div><div id="abo">Body</div>
-        <div id="act" onclick="skip()">CTA</div><div id="are"></div>
-      </div>
-    </div>
+    <video id="vid" preload="auto" playsinline><source src="data:{mime};base64,{b64}" type="{mime}"></video>
+    <div id="ov"><div id="ac">
+      <div class="b" id="bt">mid-roll</div><div class="b" id="bm">🤖 auto</div>
+      <div class="b" id="bs" onclick="skip()">✕ Skip</div><div class="b" id="bsim">🎯 —%</div>
+      <div id="acd"></div><div id="aem">🎬</div><div id="abr">Brand</div>
+      <div id="ahl">Headline</div><div id="abo">Body</div>
+      <div id="act" onclick="skip()">CTA</div><div id="are"></div>
+    </div></div>
   </div>
   <div id="cb">
     <div id="pw" onclick="seekBar(event)"><div id="pf"></div></div>
     <div id="ctrl">
-      <button id="pb" onclick="toggle()">▶</button>
-      <span id="td">0:00 / 0:00</span>
-      <div id="vol"><span id="vi" onclick="mute()">🔊</span>
-        <input type="range" min="0" max="1" step=".05" value="1" oninput="VID.volume=this.value">
-      </div>
+      <button id="pb" onclick="toggle()">▶</button><span id="td">0:00 / 0:00</span>
+      <div id="vol"><span id="vi" onclick="mute()">🔊</span><input type="range" min="0" max="1" step=".05" value="1" oninput="VID.volume=this.value"></div>
     </div>
   </div>
   <div id="sb">Ready · {len(markers)} ad markers · press ▶</div>
-  <div id="sp">
-    <div id="sp-hd">📢 Ad markers · ⭐ key scenes — click any to jump</div>
-    <div id="sp-list"></div>
-  </div>
+  <div id="sp"><div id="sp-hd">📢 Ad markers · ⭐ key scenes — click to jump</div><div id="sp-list"></div></div>
 </div>
 <script>
 var VID=document.getElementById('vid'),M={mjs},P={pjs},SC={sjs};
@@ -1317,27 +1329,14 @@ VID.addEventListener('loadedmetadata',function(){{
     if(m.sec<=0)return;
     var pct=(m.sec/dur)*100;
     var d=document.createElement('div');d.className='pm';d.style.left=pct+'%';
-    d.style.background=m.mode==='auto'?'#f59e0b':'#ef4444';
-    d.title=m.ad_brand+' @ '+m.fmt+' · '+Math.round(m.sim*100)+'%';
+    d.style.background=m.mode==='auto'?'#f59e0b':'#ef4444';d.title=m.ad_brand+' · '+Math.round(m.sim*100)+'%';
     d.onclick=function(e){{e.stopPropagation();VID.currentTime=Math.max(0,m.sec-.5);VID.play();}};
-    var l=document.createElement('div');l.className='pml';l.style.left=pct+'%';
-    l.style.color=m.mode==='auto'?'#d97706':'#dc2626';l.textContent='📢'+m.fmt.slice(3);
+    var l=document.createElement('div');l.className='pml';l.style.left=pct+'%';l.style.color='#d97706';l.textContent='📢'+m.fmt.slice(3);
     pw.appendChild(d);pw.appendChild(l);
   }});
   var sl=document.getElementById('sp-list');
-  M.forEach(function(m){{
-    var c=document.createElement('span');c.className='chip adchip';
-    c.title=m.ad_brand+' — '+m.ad_title+' | '+Math.round(m.sim*100)+'% | '+m.mode;
-    c.textContent=m.ad_emoji+' '+(m.sec===0?'Pre':m.fmt.slice(3))+' '+m.ad_brand+' '+Math.round(m.sim*100)+'%';
-    c.onclick=function(){{VID.currentTime=Math.max(0,m.sec-.5);VID.play();}};
-    sl.appendChild(c);
-  }});
-  SC.forEach(function(s){{
-    var c=document.createElement('span');c.className='chip'+(s.key?' key':'');c.id='sc'+s.sec;
-    c.textContent=(s.key?'⭐':'')+s.fmt+' '+s.label;
-    c.onclick=function(){{VID.currentTime=s.sec;VID.play();}};
-    sl.appendChild(c);
-  }});
+  M.forEach(function(m){{var c=document.createElement('span');c.className='chip adchip';c.textContent=m.ad_emoji+' '+(m.sec===0?'Pre':m.fmt.slice(3))+' '+m.ad_brand+' '+Math.round(m.sim*100)+'%';c.onclick=function(){{VID.currentTime=Math.max(0,m.sec-.5);VID.play();}};sl.appendChild(c);}});
+  SC.forEach(function(s){{var c=document.createElement('span');c.className='chip'+(s.key?' key':'');c.id='sc'+s.sec;c.textContent=(s.key?'⭐':'')+s.fmt+' '+s.label;c.onclick=function(){{VID.currentTime=s.sec;VID.play();}};sl.appendChild(c);}});
   document.getElementById('sb').textContent='Ready · '+M.length+' ads · '+SC.length+' scenes';
 }});
 VID.addEventListener('timeupdate',function(){{
@@ -1351,219 +1350,111 @@ VID.addEventListener('timeupdate',function(){{
   M.forEach(function(m){{var k=m.ad_brand+'_'+m.sec;if(!shown[k]&&t>=m.sec&&m.sec>=0){{shown[k]=true;showAd(m);}}}});
 }});
 VID.addEventListener('ended',function(){{if(!shown.post){{shown.post=true;showAd(P);}}}});
-VID.addEventListener('play',function onFirst(){{
-  var pre=M.find(function(m){{return m.sec===0;}});
-  if(pre&&!shown[pre.ad_brand+'_0']){{shown[pre.ad_brand+'_0']=true;VID.pause();showAd(pre);}}
-  VID.removeEventListener('play',onFirst);
-}},{{once:true}});
+VID.addEventListener('play',function onFirst(){{var pre=M.find(function(m){{return m.sec===0;}});if(pre&&!shown[pre.ad_brand+'_0']){{shown[pre.ad_brand+'_0']=true;VID.pause();showAd(pre);}}VID.removeEventListener('play',onFirst);}},{{once:true}});
 function showAd(m){{
-  adOn=true;VID.pause();
-  document.getElementById('ov').style.display='flex';
+  adOn=true;VID.pause();document.getElementById('ov').style.display='flex';
   document.getElementById('ac').style.background=m.ad_bg;
-  document.getElementById('bt').textContent=m.type;
-  document.getElementById('bm').textContent=m.mode==='auto'?'🤖 AI matched':'✋ Manual';
-  document.getElementById('bs').style.visibility='hidden';
-  document.getElementById('bsim').textContent='🎯 '+Math.round((m.sim||0)*100)+'% match';
-  document.getElementById('aem').textContent=m.ad_emoji;
-  document.getElementById('abr').textContent=m.ad_brand;
-  document.getElementById('ahl').textContent=m.ad_headline;
-  document.getElementById('abo').textContent=m.ad_body;
-  document.getElementById('act').textContent=m.ad_cta;
-  document.getElementById('are').textContent=m.reason||'';
-  var s=Math.min(5,m.duration||15);
-  document.getElementById('acd').textContent='Skippable in '+s+'s';
-  document.getElementById('sb').textContent='📢 '+m.type+' · '+m.ad_brand+' — '+m.ad_title+' · '+Math.round((m.sim||0)*100)+'% sim';
-  cdt=setInterval(function(){{s--;
-    if(s<=0){{clearInterval(cdt);document.getElementById('acd').textContent='';document.getElementById('bs').style.visibility='visible';}}
-    else document.getElementById('acd').textContent='Skippable in '+s+'s';
-  }},1000);
+  document.getElementById('bt').textContent=m.type;document.getElementById('bm').textContent=m.mode==='auto'?'🤖 AI':'✋ Manual';
+  document.getElementById('bs').style.visibility='hidden';document.getElementById('bsim').textContent='🎯 '+Math.round((m.sim||0)*100)+'%';
+  document.getElementById('aem').textContent=m.ad_emoji;document.getElementById('abr').textContent=m.ad_brand;
+  document.getElementById('ahl').textContent=m.ad_headline;document.getElementById('abo').textContent=m.ad_body;
+  document.getElementById('act').textContent=m.ad_cta;document.getElementById('are').textContent=m.reason||'';
+  var s=Math.min(5,m.duration||15);document.getElementById('acd').textContent='Skippable in '+s+'s';
+  document.getElementById('sb').textContent='📢 '+m.type+' · '+m.ad_brand+' · '+Math.round((m.sim||0)*100)+'% match';
+  cdt=setInterval(function(){{s--;if(s<=0){{clearInterval(cdt);document.getElementById('acd').textContent='';document.getElementById('bs').style.visibility='visible';}}else document.getElementById('acd').textContent='Skippable in '+s+'s';}},1000);
 }}
 function skip(){{clearInterval(cdt);adOn=false;document.getElementById('ov').style.display='none';if(!VID.ended)VID.play();document.getElementById('sb').textContent='▶ Playing';}}
 function toggle(){{VID.paused?VID.play():VID.pause();}}
 function seekBar(e){{var r=document.getElementById('pw').getBoundingClientRect();VID.currentTime=((e.clientX-r.left)/r.width)*(VID.duration||0);}}
 function mute(){{VID.muted=!VID.muted;document.getElementById('vi').textContent=VID.muted?'🔇':'🔊';}}
 </script></body></html>"""
-    st.components.v1.html(html, height=680, scrolling=False)
+    st.components.v1.html(html,height=680,scrolling=False)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 4 — INSIGHTS
-# Cross-video analytics: engagement, IAB breakdown, ad performance
 # ══════════════════════════════════════════════════════════════════════════════
 def page_insights():
-    st.markdown("""
-    <div style="padding:4px 0 20px">
-      <div style="font-size:1.8rem;font-weight:800">📊 Insights</div>
-      <div style="color:#6b7280;margin-top:4px">Cross-video analytics — engagement trends, content mix, ad performance</div>
-    </div>""", unsafe_allow_html=True)
+    st.markdown('<div style="font-size:1.8rem;font-weight:800;color:#111827;padding:4px 0 4px">📊 Insights</div>', unsafe_allow_html=True)
+    st.caption("Cross-video analytics — engagement trends, content mix, ad performance")
+    st.divider()
 
     if not st.session_state.videos:
-        st.info("No videos yet — go to Library and add some.")
-        return
+        st.info("No videos yet."); return
 
     all_s = [s for vm in st.session_state.videos.values() for s in vm.scenes]
     vms   = list(st.session_state.videos.values())
+    n_s   = len(all_s)
 
-    # ── Global KPIs ───────────────────────────────────────────────────────
-    n_scenes = len(all_s)
-    avg_eng  = round(sum(s.engagement_score for s in all_s)/max(n_scenes,1),2)
-    avg_safe = round(sum(s.brand_safety.get("safety_score",1) for s in all_s)/max(n_scenes,1),2)
-    avg_fit  = round(sum(s.ad_suitability for s in all_s)/max(n_scenes,1),2)
-    n_key    = sum(len(vm.key_scenes) for vm in vms)
-    c1,c2,c3,c4,c5 = st.columns(5)
-    c1.metric("Videos",         len(vms))
-    c2.metric("Total Scenes",   n_scenes)
-    c3.metric("Avg Engagement", avg_eng)
-    c4.metric("Avg Brand Safe", f"{avg_safe:.0%}")
-    c5.metric("Avg Ad Fit",     f"{avg_fit:.0%}")
-
+    c1,c2,c3,c4,c5=st.columns(5)
+    c1.metric("Videos",       len(vms))
+    c2.metric("Total Scenes", n_s)
+    c3.metric("Avg Engagement", f"{sum(s.engagement_score for s in all_s)/max(n_s,1):.2f}")
+    c4.metric("Avg Brand Safe",  f"{sum(s.brand_safety.get('safety_score',1) for s in all_s)/max(n_s,1):.0%}")
+    c5.metric("Avg Ad Fit",      f"{sum(s.ad_suitability for s in all_s)/max(n_s,1):.0%}")
     st.divider()
 
-    tab_content, tab_engagement, tab_ads, tab_compare = st.tabs([
-        "🏷️  Content Mix", "⚡  Engagement", "📢  Ad Intelligence", "📹  Compare Videos"
-    ])
+    t1,t2,t3,t4=st.tabs(["🏷️  Content","⚡  Engagement","📢  Ad Intelligence","📹  Compare"])
 
-    # ── CONTENT MIX ───────────────────────────────────────────────────────
-    with tab_content:
-        c1, c2 = st.columns(2)
+    with t1:
+        c1,c2=st.columns(2)
         with c1:
-            labels = [s.sentiment.get("label","neutral") for s in all_s]
-            lc = {l: labels.count(l) for l in set(labels)}
-            cmap = {"positive":"#34d399","neutral":"#60a5fa","negative":"#f87171"}
-            pie_labels = list(lc.keys())
-            fig = go.Figure(go.Pie(
-                values=list(lc.values()), labels=pie_labels, hole=0.55,
-                marker=dict(colors=[cmap.get(l,"#9ca3af") for l in pie_labels])))
-            fig.update_layout(**PT, height=280,
-                title=dict(text="Sentiment Distribution", font=dict(size=13,color=_TEXT)),
-                showlegend=True, legend=dict(bgcolor="rgba(0,0,0,0)",font=dict(color=_TEXT)))
-            st.plotly_chart(fig, use_container_width=True)
-
+            labels=[s.sentiment.get("label","neutral") for s in all_s]
+            lc={l:labels.count(l) for l in set(labels)}
+            cmap={"positive":"#34d399","neutral":"#60a5fa","negative":"#f87171"}
+            pl=list(lc.keys())
+            fig=go.Figure(go.Pie(values=list(lc.values()),labels=pl,hole=0.55,
+                marker=dict(colors=[cmap.get(l,"#9ca3af") for l in pl])))
+            fig.update_layout(**PT,height=280,title=dict(text="Sentiment Mix",font=dict(size=13,color=_TEXT)),showlegend=True,legend=dict(bgcolor="rgba(0,0,0,0)",font=dict(color=_TEXT)))
+            st.plotly_chart(fig,use_container_width=True)
         with c2:
-            iab_counts: dict = {}
+            iab_c={}
             for s in all_s:
-                for cat in s.iab_categories[:1]:
-                    iab_counts[cat["name"]] = iab_counts.get(cat["name"],0)+1
-            top_iab = sorted(iab_counts.items(), key=lambda x: x[1], reverse=True)[:12]
+                for cat in s.iab_categories[:1]: iab_c[cat["name"]]=iab_c.get(cat["name"],0)+1
+            top_iab=sorted(iab_c.items(),key=lambda x:x[1],reverse=True)[:12]
             if top_iab:
-                fig2 = go.Figure(go.Bar(
-                    x=[v for _,v in top_iab], y=[k for k,_ in top_iab],
-                    orientation="h", marker_color=_AMBER))
-                fig2.update_layout(**PT, height=280,
-                    title=dict(text="Top IAB Categories", font=dict(size=13,color=_TEXT)),
-                    xaxis=dict(**_XA,title="Scenes"), yaxis=dict(**_YA))
-                st.plotly_chart(fig2, use_container_width=True)
-
-        # Narrative arcs table
+                fig2=go.Figure(go.Bar(x=[v for _,v in top_iab],y=[k for k,_ in top_iab],orientation="h",marker_color=_AMBER))
+                fig2.update_layout(**PT,height=280,title=dict(text="Top IAB Categories",font=dict(size=13,color=_TEXT)),xaxis=dict(**_XA,title="Scenes"),yaxis=dict(**_YA))
+                st.plotly_chart(fig2,use_container_width=True)
         st.markdown("#### Narrative Arcs")
-        arc_rows = [{"Video": vm.title[:40], "Arc": vm.narrative_structure,
-                     "Scenes": vm.scene_count, "Key Moments": len(vm.key_scenes),
-                     "Duration": vm.fmt_duration()} for vm in vms]
-        st.dataframe(pd.DataFrame(arc_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame([{"Video":vm.title[:40],"Arc":vm.narrative_structure,"Scenes":vm.scene_count,"Key":len(vm.key_scenes),"Duration":vm.fmt_duration()} for vm in vms]),use_container_width=True,hide_index=True)
 
-    # ── ENGAGEMENT ────────────────────────────────────────────────────────
-    with tab_engagement:
-        # Engagement distribution histogram
-        eng_vals = [s.engagement_score for s in all_s]
-        fig3 = go.Figure(go.Histogram(x=eng_vals, nbinsx=20,
-            marker_color=_AMBER, opacity=0.85))
-        fig3.update_layout(**PT, height=260,
-            title=dict(text="Engagement Distribution", font=dict(size=13,color=_TEXT)),
-            xaxis=dict(**_XA,title="Engagement Score"),
-            yaxis=dict(**_YA,title="Scene Count"))
-        st.plotly_chart(fig3, use_container_width=True)
-
-        # Top 10 most engaging scenes
+    with t2:
+        eng_vals=[s.engagement_score for s in all_s]
+        fig3=go.Figure(go.Histogram(x=eng_vals,nbinsx=20,marker_color=_AMBER,opacity=0.85))
+        fig3.update_layout(**PT,height=260,title=dict(text="Engagement Distribution",font=dict(size=13,color=_TEXT)),xaxis=dict(**_XA,title="Engagement Score"),yaxis=dict(**_YA,title="Scenes"))
+        st.plotly_chart(fig3,use_container_width=True)
         st.markdown("#### 🔥 Top 10 Most Engaging Scenes")
-        top_eng = sorted(all_s, key=lambda s: s.engagement_score, reverse=True)[:10]
-        for s in top_eng:
-            _vm2 = st.session_state.videos.get(s.video_id)
-            yt2  = getattr(_vm2,"yt_id",None) if _vm2 else None
+        for s in sorted(all_s,key=lambda s:s.engagement_score,reverse=True)[:10]:
+            _vm2=st.session_state.videos.get(s.video_id)
             if _vm2 and len(vms)>1: st.caption(f"📹 {_vm2.title[:50]}")
-            _scene_card(s, _vm2 or vms[0], yt_id=yt2)
+            _scene_card(s,_vm2 or vms[0],yt_id=getattr(_vm2,"yt_id",None) if _vm2 else None)
 
-    # ── AD INTELLIGENCE ───────────────────────────────────────────────────
-    with tab_ads:
+    with t3:
         st.markdown("#### Best Ad Opportunities Across All Videos")
-        st.caption("Ranked by ad fit × engagement × brand safety")
-
-        top_ad = sorted(all_s,
-            key=lambda s: s.ad_suitability * s.engagement_score * s.brand_safety.get("safety_score",1),
-            reverse=True)[:12]
-
-        rows = []
+        def _opp(s): return s.ad_suitability*s.engagement_score*s.brand_safety.get("safety_score",1)
+        top_ad=sorted(all_s,key=_opp,reverse=True)[:12]
+        rows=[]
         for s in top_ad:
-            _vm2 = st.session_state.videos.get(s.video_id, vms[0])
-            ad, sim = _best_ad_for_scene(s)
-            rows.append({
-                "Video":    _vm2.title[:30],
-                "Time":     s.start_fmt,
-                "Key":      "⭐" if s.scene_id in _vm2.key_scenes else "",
-                "Ad fit":   f"{s.ad_suitability:.0%}",
-                "Engagement": f"{s.engagement_score:.2f}",
-                "Safety":   f"{s.brand_safety.get('safety_score',1):.0%}",
-                "Best ad":  f"{ad['emoji']} {ad['brand']}",
-                "Match":    f"{sim['total']:.0%}",
-                "IAB":      _iab_str(s.iab_categories),
-            })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            _vm2=st.session_state.videos.get(s.video_id,vms[0])
+            ad,sim=_best_ad_for_scene(s)
+            rows.append({"Video":_vm2.title[:28],"Time":s.start_fmt,"Key":"⭐" if s.scene_id in _vm2.key_scenes else "","Opp Score":f"{_opp(s):.0%}","Ad Fit":f"{s.ad_suitability:.0%}","Engagement":f"{s.engagement_score:.2f}","Safety":f"{s.brand_safety.get('safety_score',1):.0%}","Best Ad":f"{ad['emoji']} {ad['brand']}","Match":f"{sim['total']:.0%}","IAB":_iab_str(s.iab_categories)})
+        st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
 
-        st.divider()
-        st.markdown("#### Ad Match Distribution")
-        ad_sims = []
-        for s in all_s:
-            _, sim = _best_ad_for_scene(s)
-            ad_sims.append(sim["total"])
-        fig4 = go.Figure(go.Histogram(x=ad_sims, nbinsx=20,
-            marker_color="#34d399", opacity=0.85))
-        fig4.update_layout(**PT, height=220,
-            title=dict(text="Best Ad Match Scores", font=dict(size=13,color=_TEXT)),
-            xaxis=dict(**_XA,title="Similarity Score"),
-            yaxis=dict(**_YA,title="Scenes"))
-        st.plotly_chart(fig4, use_container_width=True)
-
-    # ── COMPARE VIDEOS ────────────────────────────────────────────────────
-    with tab_compare:
-        if len(vms) < 2:
+    with t4:
+        if len(vms)<2:
             st.info("Add at least 2 videos to compare.")
         else:
-            st.markdown("#### Side-by-side Video Comparison")
-            compare_rows = []
-            for vm in vms:
-                s_all = vm.scenes
-                compare_rows.append({
-                    "Title":         vm.title[:35],
-                    "Duration":      vm.fmt_duration(),
-                    "Scenes":        vm.scene_count,
-                    "Key Moments":   len(vm.key_scenes),
-                    "Avg Engagement":f"{sum(s.engagement_score for s in s_all)/max(len(s_all),1):.2f}",
-                    "Brand Safe":    f"{sum(1 for s in s_all if s.brand_safety.get('safety_score',1)>=0.7)/max(len(s_all),1):.0%}",
-                    "Avg Ad Fit":    f"{sum(s.ad_suitability for s in s_all)/max(len(s_all),1):.0%}",
-                    "Narrative":     vm.narrative_structure,
-                    "Top Category":  vm.dominant_iab[0]["name"] if vm.dominant_iab else "—",
-                    "Positive %":    f"{sum(1 for s in s_all if s.sentiment.get('label')=='positive')/max(len(s_all),1):.0%}",
-                })
-            st.dataframe(pd.DataFrame(compare_rows), use_container_width=True, hide_index=True)
-
-            # Radar chart comparison
-            metrics = ["Avg Engagement","Ad Fit","Brand Safety","Key Density"]
-            fig5 = go.Figure()
+            rows2=[{"Title":vm.title[:35],"Duration":vm.fmt_duration(),"Scenes":vm.scene_count,"Key":len(vm.key_scenes),"Avg Eng":f"{sum(s.engagement_score for s in vm.scenes)/max(vm.scene_count,1):.2f}","Brand Safe":f"{sum(1 for s in vm.scenes if s.brand_safety.get('safety_score',1)>=0.7)/max(vm.scene_count,1):.0%}","Ad Fit":f"{sum(s.ad_suitability for s in vm.scenes)/max(vm.scene_count,1):.0%}","Arc":vm.narrative_structure,"Top IAB":vm.dominant_iab[0]["name"] if vm.dominant_iab else "—","Pos%":f"{sum(1 for s in vm.scenes if s.sentiment.get('label')=='positive')/max(vm.scene_count,1):.0%}"} for vm in vms]
+            st.dataframe(pd.DataFrame(rows2),use_container_width=True,hide_index=True)
+            fig5=go.Figure()
+            metrics=["Engagement","Ad Fit","Brand Safety","Key Density"]
             for vm in vms[:5]:
-                s_all = vm.scenes
-                vals = [
-                    sum(s.engagement_score for s in s_all)/max(len(s_all),1),
-                    sum(s.ad_suitability   for s in s_all)/max(len(s_all),1),
-                    sum(s.brand_safety.get("safety_score",1) for s in s_all)/max(len(s_all),1),
-                    len(vm.key_scenes)/max(vm.scene_count,1),
-                ]
-                fig5.add_trace(go.Scatterpolar(
-                    r=vals+[vals[0]], theta=metrics+[metrics[0]],
-                    name=vm.title[:20], fill="toself", opacity=0.6))
-            fig5.update_layout(**PT, height=340,
-                polar=dict(radialaxis=dict(visible=True,range=[0,1],
-                    gridcolor=_GRID,tickfont=dict(color=_TEXT,size=9))),
-                showlegend=True, legend=dict(bgcolor="rgba(0,0,0,0)",font=dict(color=_TEXT)))
-            st.plotly_chart(fig5, use_container_width=True)
+                s_all=vm.scenes
+                vals=[sum(s.engagement_score for s in s_all)/max(len(s_all),1),sum(s.ad_suitability for s in s_all)/max(len(s_all),1),sum(s.brand_safety.get("safety_score",1) for s in s_all)/max(len(s_all),1),len(vm.key_scenes)/max(vm.scene_count,1)]
+                fig5.add_trace(go.Scatterpolar(r=vals+[vals[0]],theta=metrics+[metrics[0]],name=vm.title[:20],fill="toself",opacity=0.6))
+            fig5.update_layout(**PT,height=340,polar=dict(radialaxis=dict(visible=True,range=[0,1],gridcolor=_GRID,tickfont=dict(color=_TEXT,size=9))),showlegend=True,legend=dict(bgcolor="rgba(0,0,0,0)",font=dict(color=_TEXT)))
+            st.plotly_chart(fig5,use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
