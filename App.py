@@ -404,133 +404,130 @@ def page_library():
 
     if st.session_state.lib_open:
         with st.container(border=True):
-            st.markdown("")   # top breathing room
-            src = st.radio("Source", ["YouTube URL", "Upload MP4 + Subtitle"], horizontal=True, key="lib_src")
+            st.markdown("&nbsp;", unsafe_allow_html=True)
+            lib_src = st.radio("Source", ["YouTube URL", "Upload MP4 + Subtitle"],
+                               horizontal=True, key="lib_src")
             st.divider()
 
-            # ── YouTube ──
-            if src == "YouTube URL":
+            # ── YouTube branch ──────────────────────────────────────────
+            if lib_src == "YouTube URL":
                 yt_url = st.text_input("YouTube URL or video ID",
-                    placeholder="https://youtube.com/watch?v=… or paste the 11-char video ID", key="lib_yt")
+                    placeholder="https://youtube.com/watch?v=… or paste the 11-char video ID",
+                    key="lib_yt")
 
-                # Manual SRT fallback
                 st.markdown("**Subtitle file** *(optional — upload if auto-fetch fails)*")
-                manual_srt = st.file_uploader("Upload .srt or .vtt (leave empty to auto-fetch)",
+                manual_srt = st.file_uploader(
+                    "Upload .srt or .vtt (leave empty to auto-fetch)",
                     type=["srt","vtt"], key="lib_yt_srt")
                 if manual_srt:
                     st.success(f"✅ Using uploaded subtitle: {manual_srt.name}")
                 else:
-                    st.caption("ℹ️ Auto-fetch works for most public videos. If it fails, download the SRT from YouTube Studio or DownSub.com and upload it here.")
+                    st.caption("ℹ️ Auto-fetch works for most public videos. "
+                               "If it fails, download the SRT from YouTube Studio "
+                               "or DownSub.com and upload it here.")
 
-                with st.expander("⚙️ Detection settings"):
-                    a1,a2,a3 = st.columns(3)
-                    min_s = a1.slider("Min scene (s)", 10, 90, 20, 5, key="lib_min")
-                    max_s = a2.slider("Max scene (s)", 60, 300, 120, 10, key="lib_max")
-                    sens  = a3.slider("Sensitivity", 0.2, 0.7, 0.35, 0.05, key="lib_sens")
+                st.markdown("**Detection settings**")
+                a1, a2, a3 = st.columns(3)
+                yt_min_s = a1.slider("Min scene (s)", 10, 90,  20,   5,    key="lib_min")
+                yt_max_s = a2.slider("Max scene (s)", 60, 300, 120,  10,   key="lib_max")
+                yt_sens  = a3.slider("Sensitivity",  0.2, 0.7, 0.35, 0.05, key="lib_sens")
 
-            if st.button("⚡ Process YouTube Video", type="primary", key="lib_yt_go"):
-                vid_id = _yt_id(yt_url.strip()) if yt_url else None
-                if not vid_id:
-                    st.error("Invalid YouTube URL or video ID"); st.stop()
-                if vid_id in st.session_state.videos:
-                    st.warning("This video is already in your library."); st.stop()
-
-                status = st.status("Processing video…", expanded=True)
-                try:
-                    with status:
-                        # Step 1: Transcript
-                        if manual_srt:
-                            st.write("📄 Using uploaded subtitle file…")
-                            transcript = manual_srt.read().decode("utf-8", errors="replace")
-                            fmt = "vtt" if manual_srt.name.lower().endswith(".vtt") else "srt"
-                        else:
-                            st.write("🌐 Fetching transcript from YouTube…")
+                if st.button("⚡ Process YouTube Video", type="primary", key="lib_yt_go"):
+                    vid_id = _yt_id(yt_url.strip()) if yt_url else None
+                    if not vid_id:
+                        st.error("Invalid YouTube URL or video ID"); st.stop()
+                    if vid_id in st.session_state.videos:
+                        st.warning("Already in library."); st.stop()
+                    status = st.status("Processing video…", expanded=True)
+                    try:
+                        with status:
+                            if manual_srt:
+                                st.write("📄 Using uploaded subtitle file…")
+                                transcript = manual_srt.read().decode("utf-8", errors="replace")
+                                fmt = "vtt" if manual_srt.name.lower().endswith(".vtt") else "srt"
+                            else:
+                                st.write("🌐 Fetching transcript from YouTube…")
+                                try:    transcript = fetch_youtube_transcript(vid_id)
+                                except Exception as e: transcript = None; st.warning(str(e))
+                                if not transcript:
+                                    status.update(label="❌ No transcript", state="error")
+                                    st.error("Could not fetch transcript. Upload an SRT file — "
+                                             "download from YouTube Studio → Subtitles or DownSub.com.")
+                                    st.stop()
+                                fmt = "srt"
+                            st.write("📋 Fetching metadata…")
                             try:
-                                transcript = fetch_youtube_transcript(vid_id)
-                            except Exception as e:
-                                transcript = None
-                                st.warning(f"Auto-fetch error: {e}")
-                            if not transcript:
-                                status.update(label="❌ Transcript unavailable", state="error")
-                                st.error("Could not fetch transcript. Try uploading an SRT file (download from YouTube Studio → Subtitles, or use DownSub.com).")
-                                st.stop()
-                            fmt = "srt"
+                                meta  = fetch_youtube_metadata(vid_id, st.session_state.yt_api_key or None)
+                                title = meta.get("title", f"YouTube · {vid_id}") if meta else f"YouTube · {vid_id}"
+                            except Exception: title = f"YouTube · {vid_id}"
+                            st.write("🔬 Detecting scenes…")
+                            vm = VideoProcessor(yt_min_s, yt_max_s, yt_sens).process_file(transcript, title, fmt)
+                            vm.yt_id = vid_id
+                            st.write(f"🗂️ Indexing {vm.scene_count} scenes…")
+                            _register(vm); _sync_qp()
+                            status.update(label=f"✅ {vm.scene_count} scenes", state="complete")
+                    except Exception as e:
+                        status.update(label="❌ Failed", state="error")
+                        st.error(str(e)); st.stop()
+                    st.rerun()
 
-                        # Step 2: Metadata
-                        st.write("📋 Fetching video metadata…")
-                        try:
-                            meta  = fetch_youtube_metadata(vid_id, st.session_state.yt_api_key or None)
-                            title = meta.get("title", f"YouTube · {vid_id}") if meta else f"YouTube · {vid_id}"
-                        except Exception:
-                            title = f"YouTube · {vid_id}"
-
-                        # Step 3: Scene detection
-                        st.write("🔬 Detecting scenes & classifying content…")
-                        vm = VideoProcessor(min_s, max_s, sens).process_file(transcript, title, fmt)
-                        vm.yt_id = vid_id
-
-                        # Step 4: Indexing
-                        st.write(f"🗂️ Indexing {vm.scene_count} scenes…")
-                        _register(vm)
-                        _sync_qp()
-
-                        status.update(label=f"✅ Done — {vm.scene_count} scenes detected", state="complete")
-                except Exception as e:
-                    status.update(label="❌ Processing failed", state="error")
-                    st.error(f"Unexpected error: {e}")
-                    st.stop()
-                st.rerun()
-
-            # ── Upload ──
+            # ── Upload branch ───────────────────────────────────────────
             else:
                 c1, c2 = st.columns([3, 2], gap="large")
                 with c1:
-                    mp4_file = st.file_uploader("Video file (MP4, MOV, WebM — optional for player)",
+                    mp4_file = st.file_uploader(
+                        "Video file (MP4, MOV, WebM) — optional, enables player",
                         type=["mp4","mov","webm","avi"], key="lib_mp4")
-                    srt_file = st.file_uploader("Subtitle file (.srt or .vtt) — required for analysis",
+                    srt_file = st.file_uploader(
+                        "Subtitle file (.srt or .vtt) — required for scene analysis",
                         type=["srt","vtt"], key="lib_srt")
-                    title_in = st.text_input("Video title", placeholder="e.g. Spider-Man No Way Home", key="lib_title")
-                    if not srt_file:
-                        st.info("📌 Subtitle file required. Video file is optional (enables live player).")
-                    else:
+                    title_in = st.text_input("Video title (optional)",
+                        placeholder="e.g. Spider-Man No Way Home", key="lib_title")
+                    if srt_file:
                         prev = srt_file.read(); srt_file.seek(0)
                         prev_lines = [l for l in prev.decode("utf-8","replace").split("\n") if l.strip()]
-                        with st.expander("📄 Subtitle preview — confirm format looks correct"):
+                        with st.expander("📄 Subtitle preview"):
                             st.code("\n".join(prev_lines[:20]), language=None)
+                    else:
+                        st.info("📌 Subtitle/transcript file required. "
+                                "Video file is optional (enables live player).")
                 with c2:
                     st.markdown("**Detection settings**")
-                    min_s = st.slider("Min scene (s)", 10, 90, 20, 5,    key="lib_u_min")
-                    max_s = st.slider("Max scene (s)", 60, 300, 120, 10,  key="lib_u_max")
-                    sens  = st.slider("Sensitivity",   0.2, 0.7, 0.35, 0.05, key="lib_u_sens")
+                    up_min_s = st.slider("Min scene (s)", 10, 90,  20,   5,    key="lib_u_min")
+                    up_max_s = st.slider("Max scene (s)", 60, 300, 120,  10,   key="lib_u_max")
+                    up_sens  = st.slider("Sensitivity",  0.2, 0.7, 0.35, 0.05, key="lib_u_sens")
 
                 if srt_file and st.button("⚡ Process Video", type="primary", key="lib_up_go"):
                     srt_file.seek(0)
                     srt_content = srt_file.read().decode("utf-8", errors="replace")
                     fmt   = "vtt" if srt_file.name.lower().endswith(".vtt") else "srt"
                     title = title_in.strip() or (mp4_file.name if mp4_file else "Uploaded Video")
-                    status = st.status("Processing video...", expanded=True)
+                    status = st.status("Processing video…", expanded=True)
                     try:
                         with status:
-                            st.write("🔬 Detecting scenes & classifying content...")
-                            vm = VideoProcessor(min_s, max_s, sens).process_file(srt_content, title, fmt)
+                            st.write("🔬 Detecting scenes & classifying content…")
+                            vm = VideoProcessor(up_min_s, up_max_s, up_sens).process_file(
+                                srt_content, title, fmt)
                             if not vm.scenes:
-                                status.update(label="❌ No scenes detected", state="error")
+                                status.update(label="❌ No scenes", state="error")
                                 st.error("No scenes detected — check subtitle format."); st.stop()
                             vm.yt_id = None
                             if mp4_file:
-                                st.write("🎞️ Loading video file...")
-                                mp4_file.seek(0); raw = mp4_file.read()
+                                st.write("🎞️ Storing video file…")
+                                mp4_file.seek(0)
+                                raw = mp4_file.read()
                                 st.session_state.video_b64[vm.video_id]  = _b64.b64encode(raw).decode()
-                                ext = mp4_file.name.split(".")[-1].lower()
+                                ext = mp4_file.name.rsplit(".", 1)[-1].lower()
                                 st.session_state.video_mime[vm.video_id] = {
                                     "mp4":"video/mp4","mov":"video/mp4",
-                                    "webm":"video/webm","avi":"video/x-msvideo"}.get(ext,"video/mp4")
-                            st.write(f"🗂️ Indexing {vm.scene_count} scenes...")
+                                    "webm":"video/webm","avi":"video/x-msvideo"
+                                }.get(ext, "video/mp4")
+                            st.write(f"🗂️ Indexing {vm.scene_count} scenes…")
                             _register(vm); _sync_qp()
-                            status.update(label=f"✅ {vm.scene_count} scenes detected", state="complete")
+                            status.update(label=f"✅ {vm.scene_count} scenes", state="complete")
                     except Exception as e:
-                        status.update(label="❌ Processing failed", state="error")
-                        st.error(f"Error: {e}"); st.stop()
+                        status.update(label="❌ Failed", state="error")
+                        st.error(str(e)); st.stop()
                     st.rerun()
 
     # ── Library ────────────────────────────────────────────────────────────
@@ -615,7 +612,8 @@ def _library_card(vm: VideoMetadata):
         m4.metric("Top Ad Moment", best_scene.start_fmt if best_scene else "—")
 
         # Tags
-        tags_html = "".join(_tag_chip(c["name"]) for c in vm.dominant_iab[:5])
+        tags_html = "".join(_tag_chip(c["name"]) for c in
+                            {c["name"]: c for c in vm.dominant_iab[:8]}.values())
         st.markdown(tags_html, unsafe_allow_html=True)
         st.markdown("")
 
@@ -665,7 +663,8 @@ def page_analyse():
     c4.metric("Avg Engagement", avg_eng)
     c5.metric("Brand Safe",  safe_pct)
 
-    tags_html = "".join(_tag_chip(c["name"]) for c in vm.dominant_iab[:6])
+    tags_html = "".join(_tag_chip(c["name"]) for c in
+                        {c["name"]: c for c in vm.dominant_iab[:8]}.values())  # deduplicate by name
     if getattr(vm,"franchise_themes",None):
         tags_html += "".join(_tag_chip(t,"#eff6ff","#bfdbfe","#1d4ed8") for t in vm.franchise_themes[:4])
     st.markdown(tags_html, unsafe_allow_html=True)
@@ -680,15 +679,13 @@ def page_analyse():
         if yt_id:
             _yt_player_with_scenes(yt_id, vm.scenes, vm.key_scenes)
         elif has_mp4:
-            # st.video() for simple browsing - lighter than custom player
-            b64  = st.session_state.video_b64[vm.video_id]
+            import io, base64 as _b64v
+            raw_bytes = _b64v.b64decode(st.session_state.video_b64[vm.video_id])
             mime = st.session_state.video_mime.get(vm.video_id, "video/mp4")
-            import base64 as _b64v
-            raw_bytes = _b64v.b64decode(b64)
-            st.video(raw_bytes, format=mime)
-            st.caption("💡 Use the **Monetise** tab for the full ad-injection player with scene navigation.")
+            st.video(io.BytesIO(raw_bytes), format=mime)
+            st.caption("💡 For ad injection + scene navigation use the **Monetise → Live Preview** tab.")
         else:
-            st.info("No playable video — explore scenes in the other tabs.")
+            st.info("No playable video — upload an MP4 in Library, or explore scenes in the tabs below.")
             for s in vm.scenes[:6]:
                 st.caption(f"`{s.start_fmt}` — {s.text[:90]}…")
 
