@@ -155,6 +155,7 @@ _DEFAULTS = {
     "ad_markers": {},          # video_id → list of marker dicts
     "video_b64": {},           # video_id → base64 string
     "video_mime": {},          # video_id → mime type
+    "ai_meta":   {},           # video_id → AI-generated metadata dict
 }
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
@@ -242,7 +243,165 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════════════════
 # SHARED HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
-def _register(vm: VideoMetadata):
+
+# ── AI Metadata Generation ─────────────────────────────────────────────────
+def _generate_ai_meta(vm: VideoMetadata, transcript_sample: str):
+    """Call Claude to generate rich metadata for a video. Stores in session state."""
+    import json as _j
+
+    # Build scene summary for context
+    scene_summary = "\n".join(
+        f"- [{s.start_fmt}] {s.sentiment.get('label','?').upper()} | "
+        f"eng:{s.engagement_score:.2f} | {s.text[:80]}"
+        for s in vm.scenes[:20])
+
+    iab_tags = ", ".join({c["name"] for s in vm.scenes for c in s.iab_categories[:2]})
+
+    prompt = f"""You are a video metadata expert for a content monetisation platform.
+
+Analyse this video and return ONLY a JSON object (no markdown, no explanation):
+
+Video title: {vm.title}
+Duration: {vm.fmt_duration()}
+Scene count: {vm.scene_count}
+Narrative arc: {vm.narrative_structure}
+IAB categories detected: {iab_tags}
+
+Scene breakdown (first 20):
+{scene_summary}
+
+Transcript sample:
+{transcript_sample[:2000]}
+
+Return this exact JSON structure:
+{{
+  "summary": "2-3 sentence engaging description of what this video is about",
+  "short_description": "One punchy sentence (max 15 words) for cards/previews",
+  "content_rating": "G | PG | PG-13 | R",
+  "rating_reason": "Brief reason for the rating",
+  "primary_genre": "e.g. Action, Documentary, Comedy, Tutorial, Interview, News",
+  "target_audience": "e.g. Adults 25-44, Teens, Families, Professionals",
+  "key_themes": ["theme1", "theme2", "theme3", "theme4"],
+  "mood": "e.g. Exciting, Informative, Emotional, Humorous, Suspenseful",
+  "keywords": ["kw1", "kw2", "kw3", "kw4", "kw5", "kw6", "kw7", "kw8"],
+  "content_warnings": [],
+  "advertiser_suitability": "High | Medium | Low",
+  "advertiser_reason": "Why advertisers would or wouldn't want this content",
+  "seo_title": "SEO-optimised title (max 60 chars)",
+  "seo_description": "SEO meta description (max 155 chars)"
+}}"""
+
+    try:
+        import urllib.request, urllib.error
+        body = _j.dumps({
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 1000,
+            "messages": [{"role": "user", "content": prompt}]
+        }).encode()
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = _j.loads(resp.read())
+        raw = data["content"][0]["text"].strip()
+        # Strip markdown fences if present
+        raw = raw.replace("```json","").replace("```","").strip()
+        meta = _j.loads(raw)
+        st.session_state.ai_meta[vm.video_id] = meta
+    except Exception as e:
+        # Fallback: generate basic metadata from what we already know
+        iab_list = list({c["name"] for s in vm.scenes for c in s.iab_categories[:2]})
+        pos = sum(1 for s in vm.scenes if s.sentiment.get("label")=="positive")
+        neg = sum(1 for s in vm.scenes if s.sentiment.get("label")=="negative")
+        mood = "Exciting" if pos > neg*2 else "Tense" if neg > pos else "Balanced"
+        st.session_state.ai_meta[vm.video_id] = {
+            "summary": f"{vm.title} — a {vm.fmt_duration()} video with {vm.scene_count} scenes across a {vm.narrative_structure} arc.",
+            "short_description": f"{vm.title[:60]}",
+            "content_rating": "PG", "rating_reason": "General content",
+            "primary_genre": iab_list[0] if iab_list else "General",
+            "target_audience": "General audience",
+            "key_themes": iab_list[:4],
+            "mood": mood, "keywords": iab_list[:8],
+            "content_warnings": [],
+            "advertiser_suitability": "High" if sum(s.brand_safety.get("safety_score",1) for s in vm.scenes)/max(vm.scene_count,1) > 0.7 else "Medium",
+            "advertiser_reason": "Based on content analysis",
+            "seo_title": vm.title[:60],
+            "seo_description": f"{vm.title} — {vm.scene_count} scenes, {vm.fmt_duration()}"
+        }
+
+
+def _show_ai_meta(vm: VideoMetadata):
+    """Display AI-generated metadata panel."""
+    meta = st.session_state.ai_meta.get(vm.video_id)
+    if not meta:
+        col1, col2 = st.columns([3,1])
+        col1.info("🤖 No AI metadata yet — generate it below")
+        if col2.button("✨ Generate Now", key=f"gen_meta_{vm.video_id}", type="primary"):
+            srt_sample = " ".join(s.text for s in vm.scenes[:15])
+            with st.spinner("🤖 Generating AI metadata…"):
+                _generate_ai_meta(vm, srt_sample)
+            st.rerun()
+        return
+
+    # Rating badge
+    rating_color = {"G":"#16a34a","PG":"#2563eb","PG-13":"#d97706","R":"#dc2626"}.get(meta.get("content_rating","PG"),"#6b7280")
+
+    st.markdown(
+        f'<div style="background:linear-gradient(135deg,#fffbeb,#fef3c7);border:1px solid #fcd34d;'
+        f'border-radius:12px;padding:16px 20px;margin-bottom:12px">'
+        f'<div style="display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap">'
+        f'<div style="flex:1;min-width:220px">'
+        f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#92400e;margin-bottom:4px">AI Summary</div>'
+        f'<div style="font-size:14px;color:#111827;line-height:1.6">{meta.get("summary","")}</div>'
+        f'</div>'
+        f'<div style="display:flex;flex-direction:column;gap:8px;min-width:160px">'
+        f'<div><span style="background:{rating_color};color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px">{meta.get("content_rating","?")}</span>'
+        f'<span style="font-size:11px;color:#6b7280;margin-left:6px">{meta.get("rating_reason","")}</span></div>'
+        f'<div style="font-size:12px"><b>Genre:</b> {meta.get("primary_genre","—")}</div>'
+        f'<div style="font-size:12px"><b>Mood:</b> {meta.get("mood","—")}</div>'
+        f'<div style="font-size:12px"><b>Audience:</b> {meta.get("target_audience","—")}</div>'
+        f'</div></div></div>', unsafe_allow_html=True)
+
+    # Themes + keywords
+    col1, col2 = st.columns(2)
+    with col1:
+        themes = meta.get("key_themes",[])
+        if themes:
+            chips = "".join(_tag_chip(t,"#eff6ff","#bfdbfe","#1d4ed8","11px") for t in themes)
+            st.markdown(f"**Key Themes**  {chips}", unsafe_allow_html=True)
+    with col2:
+        kws = meta.get("keywords",[])
+        if kws:
+            chips = "".join(_tag_chip(k,"#f5f3ff","#ddd6fe","#5b21b6","11px") for k in kws[:6])
+            st.markdown(f"**SEO Keywords**  {chips}", unsafe_allow_html=True)
+
+    # Advertiser suitability
+    suit = meta.get("advertiser_suitability","Medium")
+    suit_color = {"High":"#16a34a","Medium":"#d97706","Low":"#dc2626"}.get(suit,"#6b7280")
+    st.markdown(
+        f'<div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;'
+        f'padding:10px 14px;margin:8px 0;display:flex;align-items:center;gap:12px">'
+        f'<span style="font-size:12px;font-weight:700;color:{suit_color}">📢 Advertiser Suitability: {suit}</span>'
+        f'<span style="font-size:12px;color:#6b7280">{meta.get("advertiser_reason","")}</span>'
+        f'</div>', unsafe_allow_html=True)
+
+    # SEO fields
+    with st.expander("🔍 SEO Metadata"):
+        st.text_input("SEO Title", value=meta.get("seo_title",""), key=f"seo_t_{vm.video_id}")
+        st.text_area("SEO Description", value=meta.get("seo_description",""), key=f"seo_d_{vm.video_id}", height=70)
+        short = meta.get("short_description","")
+        if short: st.caption(f"**Short description:** {short}")
+
+    # Regenerate
+    if st.button("🔄 Regenerate AI Metadata", key=f"regen_meta_{vm.video_id}"):
+        srt_sample = " ".join(s.text for s in vm.scenes[:15])
+        with st.spinner("Regenerating…"):
+            _generate_ai_meta(vm, srt_sample)
+        st.rerun()
+
+
     st.session_state.videos[vm.video_id] = vm
     st.session_state.search_engine.add_scenes(vm.scenes)
     if st.session_state.search_engine.vectorizer is not None:
@@ -483,19 +642,45 @@ def page_library():
                         type=["srt","vtt"], key="lib_srt")
                     title_in = st.text_input("Video title (optional)",
                         placeholder="e.g. Spider-Man No Way Home", key="lib_title")
+
+                    # Subtitle preview — inline, no expander to avoid overlap
                     if srt_file:
                         prev = srt_file.read(); srt_file.seek(0)
-                        prev_lines = [l for l in prev.decode("utf-8","replace").split("\n") if l.strip()]
-                        with st.expander("📄 Subtitle preview"):
-                            st.code("\n".join(prev_lines[:20]), language=None)
+                        prev_lines = [l.strip() for l in prev.decode("utf-8","replace").split("\n") if l.strip()]
+                        n_entries = sum(1 for l in prev_lines if l.isdigit())
+                        st.markdown(
+                            f'<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;'
+                            f'padding:10px 14px;margin:8px 0">'
+                            f'<span style="font-size:12px;font-weight:600;color:#166534">✅ Subtitle loaded</span>'
+                            f'<span style="font-size:12px;color:#374151;margin-left:8px">'
+                            f'{srt_file.name} · ~{n_entries} entries</span></div>',
+                            unsafe_allow_html=True)
+                        # Show first 3 subtitle entries cleanly
+                        entry_lines = []
+                        for l in prev_lines[:40]:
+                            entry_lines.append(l)
+                            if len(entry_lines) >= 15: break
+                        st.caption("**Preview:**  " + " · ".join(
+                            l for l in entry_lines if "-->" not in l and not l.isdigit())[:120])
                     else:
-                        st.info("📌 Subtitle/transcript file required. "
-                                "Video file is optional (enables live player).")
+                        st.markdown(
+                            '<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;'
+                            'padding:10px 14px;margin:8px 0;font-size:12px;color:#92400e">'
+                            '📌 Subtitle/transcript file required for scene analysis. '
+                            'Video file is optional (enables live player).</div>',
+                            unsafe_allow_html=True)
+
                 with c2:
                     st.markdown("**Detection settings**")
                     up_min_s = st.slider("Min scene (s)", 10, 90,  20,   5,    key="lib_u_min")
                     up_max_s = st.slider("Max scene (s)", 60, 300, 120,  10,   key="lib_u_max")
                     up_sens  = st.slider("Sensitivity",  0.2, 0.7, 0.35, 0.05, key="lib_u_sens")
+                    st.markdown("")
+                    st.markdown("**🤖 AI enrichment**")
+                    do_ai = st.checkbox("Generate AI metadata after processing",
+                                        value=True, key="lib_do_ai",
+                                        help="Auto-generates: summary, content tags, audience profile, "
+                                             "content rating, key themes. Adds ~5s.")
 
                 if srt_file and st.button("⚡ Process Video", type="primary", key="lib_up_go"):
                     srt_file.seek(0)
@@ -524,6 +709,9 @@ def page_library():
                                 }.get(ext, "video/mp4")
                             st.write(f"🗂️ Indexing {vm.scene_count} scenes…")
                             _register(vm); _sync_qp()
+                            if do_ai:
+                                st.write("🤖 Generating AI metadata…")
+                                _generate_ai_meta(vm, srt_content[:4000])
                             status.update(label=f"✅ {vm.scene_count} scenes", state="complete")
                     except Exception as e:
                         status.update(label="❌ Failed", state="error")
@@ -611,14 +799,22 @@ def _library_card(vm: VideoMetadata):
         best_scene = max(vm.scenes, key=lambda s: s.ad_suitability * s.engagement_score) if vm.scenes else None
         m4.metric("Top Ad Moment", best_scene.start_fmt if best_scene else "—")
 
-        # Tags
+        # Tags + AI short description
         tags_html = "".join(_tag_chip(c["name"]) for c in
                             {c["name"]: c for c in vm.dominant_iab[:8]}.values())
+        meta = st.session_state.ai_meta.get(vm.video_id)
+        if meta:
+            rating_color = {"G":"#16a34a","PG":"#2563eb","PG-13":"#d97706","R":"#dc2626"}.get(meta.get("content_rating","PG"),"#6b7280")
+            tags_html += (f'<span style="background:{rating_color};color:#fff;font-size:11px;'
+                          f'font-weight:700;padding:3px 10px;border-radius:20px;margin:2px">'
+                          f'{meta.get("content_rating","?")} · {meta.get("primary_genre","")}</span>')
         st.markdown(tags_html, unsafe_allow_html=True)
+        if meta and meta.get("short_description"):
+            st.caption(f'💬 {meta["short_description"]}')
         st.markdown("")
 
         # Actions
-        a1,a2,a3,a4 = st.columns(4)
+        a1,a2,a3,a4,a5 = st.columns(5)
         if a1.button("🔬 Analyse", key=f"lib_an_{vm.video_id}"):
             st.session_state.selected_video = vm.video_id
             st.session_state.page = "analyse"; st.rerun()
@@ -628,9 +824,13 @@ def _library_card(vm: VideoMetadata):
         if a3.button("📊 Insights", key=f"lib_in_{vm.video_id}"):
             st.session_state.selected_video = vm.video_id
             st.session_state.page = "insights"; st.rerun()
-        if a4.button("🗑 Remove", key=f"lib_dl_{vm.video_id}"):
+        if a4.button("✨ AI Meta", key=f"lib_ai_{vm.video_id}"):
+            st.session_state.selected_video = vm.video_id
+            st.session_state.page = "analyse"; st.rerun()
+        if a5.button("🗑 Remove", key=f"lib_dl_{vm.video_id}"):
             del st.session_state.videos[vm.video_id]
-            for d in [st.session_state.video_b64, st.session_state.video_mime, st.session_state.ad_markers]:
+            for d in [st.session_state.video_b64, st.session_state.video_mime,
+                      st.session_state.ad_markers, st.session_state.ai_meta]:
                 d.pop(vm.video_id, None)
             if st.session_state.selected_video == vm.video_id:
                 st.session_state.selected_video = next(iter(st.session_state.videos), None)
@@ -670,8 +870,8 @@ def page_analyse():
     st.markdown(tags_html, unsafe_allow_html=True)
     st.divider()
 
-    tab_watch, tab_timeline, tab_scenes, tab_search, tab_opps = st.tabs([
-        "▶️  Watch", "📈  Timeline", "🎬  Scenes", "🔍  Search", "🎯  Ad Opportunities"
+    tab_watch, tab_timeline, tab_scenes, tab_search, tab_opps, tab_aimeta = st.tabs([
+        "▶️  Watch", "📈  Timeline", "🎬  Scenes", "🔍  Search", "🎯  Ad Opportunities", "✨  AI Metadata"
     ])
 
     # ── WATCH ─────────────────────────────────────────────────────────────
@@ -713,41 +913,162 @@ def page_analyse():
     # ── SEARCH ────────────────────────────────────────────────────────────
     with tab_search:
         se = st.session_state.search_engine
-        if "aq_staged" not in st.session_state: st.session_state.aq_staged=""
-        default_q = st.session_state.pop("aq_staged","")
-        query = st.text_input("Search by meaning",
-            placeholder="e.g. 'tense confrontation' · 'product demo' · 'emotional speech'",
-            key="aq", value=default_q)
-        if not query:
-            st.caption("**Try:**")
-            examples=["action sequence","emotional moment","expert interview","product showcase",
-                      "dramatic reveal","comedy scene","tutorial step","key decision","outdoor scene"]
-            cols=st.columns(3)
-            for i,ex in enumerate(examples):
-                if cols[i%3].button(ex,key=f"aq_{i}"):
-                    st.session_state.aq_staged=ex; st.rerun()
-        else:
-            k1,k2,k3=st.columns(3)
-            top_k  = k1.select_slider("Results",[3,5,10,20],value=5,key="aq_k")
-            safety = k2.selectbox("Safety",["Any","Moderate (50%+)","Strict (80%+)"],key="aq_safe")
-            scope  = k3.radio("Scope",["This video","All videos"],horizontal=True,key="aq_scope")
-            smap   = {"Any":0.0,"Moderate (50%+)":0.5,"Strict (80%+)":0.8}
-            with st.spinner("Searching…"):
-                results = se.search(query,top_k=top_k,diversify=True,min_safety=smap[safety],expand=True)
-            if scope=="This video":
-                results=[r for r in results if r.scene.video_id==vm.video_id]
-            if not results: st.warning("No matches — try different words.")
+
+        # Search mode selector
+        srch_mode = st.radio(
+            "Mode", ["🔍 Semantic Search", "📢 Ad Targeting", "🎬 Similar Scenes"],
+            horizontal=True, key="srch_mode",
+            help=("Semantic: find scenes by meaning  |  "
+                  "Ad Targeting: find best scenes for a specific product/brand  |  "
+                  "Similar: find scenes like the current one"))
+        st.markdown("")
+
+        # ── Semantic Search ──────────────────────────────────────────────
+        if srch_mode == "🔍 Semantic Search":
+            if "aq_staged" not in st.session_state: st.session_state.aq_staged = ""
+            default_q = st.session_state.pop("aq_staged", "")
+            query = st.text_input("Search by meaning",
+                placeholder="e.g. 'tense confrontation' · 'product demo' · 'emotional speech'",
+                key="aq", value=default_q)
+            if not query:
+                st.caption("**Quick searches:**")
+                examples = ["action sequence","emotional moment","expert interview",
+                            "product showcase","dramatic reveal","comedy scene",
+                            "tutorial step","key decision","outdoor scene","crowd reaction"]
+                cols = st.columns(5)
+                for i, ex in enumerate(examples):
+                    if cols[i%5].button(ex, key=f"aq_{i}"):
+                        st.session_state.aq_staged = ex; st.rerun()
             else:
-                st.success(f"**{len(results)} scenes** matched")
-                for r in results:
-                    _vm2=st.session_state.videos.get(r.scene.video_id,vm)
-                    if scope=="All videos" and len(st.session_state.videos)>1:
-                        st.caption(f"📹 {_vm2.title[:50]}")
-                    _scene_card(r.scene,_vm2,score=r.score,yt_id=getattr(_vm2,"yt_id",None))
+                k1,k2,k3 = st.columns(3)
+                top_k  = k1.select_slider("Results", [3,5,10,20], value=5, key="aq_k")
+                safety = k2.selectbox("Safety", ["Any","Moderate (50%+)","Strict (80%+)"], key="aq_safe")
+                scope  = k3.radio("Scope", ["This video","All videos"], horizontal=True, key="aq_scope")
+                smap   = {"Any":0.0,"Moderate (50%+)":0.5,"Strict (80%+)":0.8}
+                with st.spinner("Searching…"):
+                    results = se.search(query, top_k=top_k, diversify=True,
+                                        min_safety=smap[safety], expand=True)
+                if scope == "This video":
+                    results = [r for r in results if r.scene.video_id == vm.video_id]
+                if not results:
+                    st.warning("No matches — try different words.")
+                else:
+                    st.success(f"**{len(results)} scenes** matched · sorted by relevance")
+                    for r in results:
+                        _vm2 = st.session_state.videos.get(r.scene.video_id, vm)
+                        if scope == "All videos" and len(st.session_state.videos) > 1:
+                            st.caption(f"📹 {_vm2.title[:50]}")
+                        _scene_card(r.scene, _vm2, score=r.score,
+                                    yt_id=getattr(_vm2,"yt_id",None),
+                                    ad_match=_best_ad_for_scene(r.scene))
+
+        # ── Ad Targeting Mode ────────────────────────────────────────────
+        elif srch_mode == "📢 Ad Targeting":
+            st.caption("Find the best scenes across your library to place a specific ad. "
+                       "Enter your product/brand and what makes your audience tick.")
+            at1, at2 = st.columns(2)
+            ad_brand   = at1.text_input("Brand / Product", placeholder="e.g. Nike, Tesla, Duolingo", key="at_brand")
+            ad_tags    = at2.text_input("Targeting keywords",
+                placeholder="e.g. sports fitness motivation energy", key="at_tags")
+            ad_safety  = st.select_slider("Min brand safety", [0.5,0.6,0.7,0.8,0.9,1.0],
+                                          value=0.7, key="at_safe")
+            scope_at   = st.radio("Search scope", ["This video","All videos"],
+                                  horizontal=True, key="at_scope")
+            if st.button("🎯 Find Best Placements", type="primary", key="at_go",
+                         disabled=not (ad_brand or ad_tags)):
+                dummy_ad = {"id":"preview","brand":ad_brand,"tags":ad_tags,"title":ad_brand}
+                pool = (vm.scenes if scope_at=="This video"
+                        else [s for v in st.session_state.videos.values() for s in v.scenes])
+                # Score every scene
+                scored = []
+                for scene in pool:
+                    if scene.brand_safety.get("safety_score",1) < ad_safety: continue
+                    sim = _ad_similarity(dummy_ad, scene)
+                    opp = sim["total"] * scene.engagement_score * scene.brand_safety.get("safety_score",1)
+                    scored.append((scene, sim, opp))
+                scored.sort(key=lambda x: x[2], reverse=True)
+                top = scored[:10]
+                if not top:
+                    st.warning("No suitable scenes found — try relaxing the safety threshold.")
+                else:
+                    st.success(f"**{len(top)} best placements** for **{ad_brand or ad_tags}**")
+                    for scene, sim, opp in top:
+                        _vm2 = st.session_state.videos.get(scene.video_id, vm)
+                        bar = int(opp*100)
+                        c1, c2 = st.columns([4,1])
+                        with c1:
+                            _scene_card(scene, _vm2, score=opp,
+                                        yt_id=getattr(_vm2,"yt_id",None))
+                        with c2:
+                            if sim["matched_iab"]:
+                                st.caption("**Matched:** " + ", ".join(sim["matched_iab"][:3]))
+                            if st.button("➕ Add to Plan", key=f"at_add_{scene.scene_id}"):
+                                vid = scene.video_id
+                                if vid not in st.session_state.ad_markers:
+                                    st.session_state.ad_markers[vid] = []
+                                if scene.start_sec not in [m["sec"] for m in st.session_state.ad_markers[vid]]:
+                                    ad_obj = {"id":"custom_at","brand":ad_brand,"title":ad_brand,
+                                              "emoji":"📢","headline":ad_brand,"body":ad_tags,
+                                              "cta":"Learn More","bg":"linear-gradient(135deg,#6366f1,#8b5cf6)",
+                                              "tags":ad_tags}
+                                    st.session_state.ad_markers[vid].append({
+                                        "sec":scene.start_sec,"fmt":_fmt_sec(scene.start_sec),
+                                        "ad":ad_obj,"mode":"manual","duration":15,
+                                        "sim":sim["total"],"reason":f"Ad targeting: {ad_brand}"})
+                                    st.success("Added!")
+                                else:
+                                    st.info("Already in plan")
+
+        # ── Similar Scenes ───────────────────────────────────────────────
+        else:
+            st.caption("Pick a scene as a reference and find others with similar content, "
+                       "sentiment, and IAB profile — great for finding consistent ad placement windows.")
+            scene_labels = [f"{s.start_fmt} · {s.text[:50]}…" for s in vm.scenes]
+            scene_idx = st.selectbox("Reference scene", range(len(vm.scenes)),
+                                     format_func=lambda i: scene_labels[i], key="sim_sc")
+            ref_scene = vm.scenes[scene_idx]
+
+            sim_scope = st.radio("Scope", ["This video","All videos"],
+                                 horizontal=True, key="sim_scope")
+            if st.button("🔍 Find Similar", type="primary", key="sim_go"):
+                ref_iab  = {c["name"] for c in ref_scene.iab_categories}
+                ref_sent = ref_scene.sentiment.get("label","neutral")
+                ref_tok  = _tok(ref_scene.text)
+
+                pool = (vm.scenes if sim_scope=="This video"
+                        else [s for v in st.session_state.videos.values() for s in v.scenes])
+                scored2 = []
+                for scene in pool:
+                    if scene.scene_id == ref_scene.scene_id: continue
+                    # IAB overlap
+                    sc_iab = {c["name"] for c in scene.iab_categories}
+                    iab_sim = len(ref_iab & sc_iab) / max(len(ref_iab | sc_iab), 1)
+                    # Sentiment match
+                    sent_sim = 1.0 if scene.sentiment.get("label") == ref_sent else 0.3
+                    # Token overlap
+                    sc_tok = _tok(scene.text)
+                    tok_sim = len(ref_tok & sc_tok) / max(len(ref_tok | sc_tok), 1)
+                    # Engagement proximity
+                    eng_sim = 1 - abs(scene.engagement_score - ref_scene.engagement_score)
+                    total = iab_sim*0.4 + sent_sim*0.2 + tok_sim*0.3 + eng_sim*0.1
+                    scored2.append((scene, total))
+                scored2.sort(key=lambda x: x[1], reverse=True)
+
+                st.markdown(f"**Reference:** `{ref_scene.start_fmt}` — {ref_scene.text[:80]}…")
+                st.caption(f"IAB: {', '.join(ref_iab)} · Sentiment: {ref_sent} · Engagement: {ref_scene.engagement_score:.2f}")
+                st.divider()
+                for scene, sim_score in scored2[:8]:
+                    _vm2 = st.session_state.videos.get(scene.video_id, vm)
+                    _scene_card(scene, _vm2, score=sim_score, yt_id=getattr(_vm2,"yt_id",None))
+
 
     # ── AD OPPORTUNITIES ──────────────────────────────────────────────────
     with tab_opps:
         _ad_opportunity_panel(vm, yt_id)
+
+    # ── AI METADATA ───────────────────────────────────────────────────────
+    with tab_aimeta:
+        _show_ai_meta(vm)
 
 
 # ── Ad Opportunity Panel ────────────────────────────────────────────────────
