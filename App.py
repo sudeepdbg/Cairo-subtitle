@@ -42,30 +42,51 @@ st.markdown("""
 
 /* ── Sidebar ── */
 [data-testid="stSidebar"],[data-testid="stSidebar"]>div:first-child{
-  background:#0f172a!important;border-right:none!important}
-[data-testid="stSidebar"] p,[data-testid="stSidebar"] span,
-[data-testid="stSidebar"] label,[data-testid="stSidebar"] div{color:#94a3b8!important}
+  background:#0f172a!important;border-right:1px solid #1e293b!important}
 
+/* Text in sidebar */
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span:not(.stMarkdown span),
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] small{color:#64748b!important}
+
+/* Sidebar nav buttons — inactive */
 [data-testid="stSidebar"] .stButton>button{
   width:100%!important;text-align:left!important;justify-content:flex-start!important;
   background:transparent!important;border:none!important;border-radius:8px!important;
   color:#94a3b8!important;font-size:.875rem!important;font-weight:500!important;
-  padding:.6rem 1rem!important;box-shadow:none!important;transition:all .15s!important}
+  padding:.55rem 1rem!important;box-shadow:none!important;
+  transition:background .12s,color .12s!important;margin:1px 0!important}
 [data-testid="stSidebar"] .stButton>button:hover{
-  background:rgba(255,255,255,.07)!important;color:#f1f5f9!important;transform:none!important}
-[data-testid="stSidebar"] .stButton>button[kind="primary"]{
-  background:rgba(245,158,11,.15)!important;color:#fbbf24!important;
-  border-left:3px solid #f59e0b!important;border-radius:0 8px 8px 0!important;
-  font-weight:600!important}
+  background:rgba(255,255,255,.06)!important;color:#e2e8f0!important}
 
-/* ── Buttons ── */
-section.main .stButton>button,[data-testid="stMain"] .stButton>button{
+/* Hide the disabled active-page button (we render the active state as HTML) */
+[data-testid="stSidebar"] .stButton>button:disabled{
+  display:none!important}
+
+/* Sidebar selectbox styling */
+[data-testid="stSidebar"] [data-baseweb="select"]>div{
+  background:#1e293b!important;border-color:#334155!important;
+  color:#e2e8f0!important;border-radius:8px!important}
+[data-testid="stSidebar"] [data-baseweb="select"] span{color:#e2e8f0!important}
+
+/* Sidebar text input (API key) */
+[data-testid="stSidebar"] input{
+  background:#1e293b!important;border-color:#334155!important;
+  color:#e2e8f0!important;border-radius:8px!important}
+[data-testid="stSidebar"] input::placeholder{color:#475569!important}
+
+/* ── Main content buttons ── */
+section.main .stButton>button{
   background:#f59e0b!important;color:#111!important;border:none!important;
-  border-radius:8px!important;font-weight:600!important;padding:.55rem 1.4rem!important;
-  box-shadow:0 1px 4px rgba(245,158,11,.3)!important;transition:all .15s!important}
+  border-radius:8px!important;font-weight:600!important;padding:.5rem 1.3rem!important;
+  box-shadow:0 1px 3px rgba(245,158,11,.25)!important;transition:all .12s!important}
 section.main .stButton>button:hover{
   background:#d97706!important;transform:translateY(-1px)!important;
-  box-shadow:0 4px 12px rgba(245,158,11,.35)!important}
+  box-shadow:0 3px 10px rgba(245,158,11,.3)!important}
+section.main .stButton>button:disabled{
+  background:#e5e7eb!important;color:#9ca3af!important;
+  box-shadow:none!important;transform:none!important}
 
 /* ── Tabs ── */
 [data-testid="stTabs"] [data-baseweb="tab-list"]{
@@ -73,30 +94,33 @@ section.main .stButton>button:hover{
   border-radius:10px!important;padding:4px!important;gap:2px!important}
 [data-testid="stTabs"] [data-baseweb="tab"]{
   background:transparent!important;color:#6b7280!important;border-radius:7px!important;
-  font-size:.85rem!important;font-weight:500!important;border:none!important;padding:6px 18px!important}
+  font-size:.82rem!important;font-weight:500!important;border:none!important;
+  padding:6px 14px!important;transition:all .12s!important}
 [data-testid="stTabs"] [aria-selected="true"]{
   background:#f59e0b!important;color:#111!important;font-weight:700!important}
 
-/* ── Metric cards ── */
-[data-testid="stMetric"]{
+/* ── Metric cards (main content only) ── */
+section.main [data-testid="stMetric"]{
   background:#f9fafb!important;border:1px solid #e5e7eb!important;
-  border-radius:12px!important;padding:1rem 1.2rem!important}
-[data-testid="stMetricLabel"]>div{
-  font-size:.68rem!important;font-weight:700!important;letter-spacing:.07em!important;
+  border-radius:12px!important;padding:.9rem 1.1rem!important}
+section.main [data-testid="stMetricLabel"]>div{
+  font-size:.65rem!important;font-weight:700!important;letter-spacing:.07em!important;
   text-transform:uppercase!important;color:#9ca3af!important}
-[data-testid="stMetricValue"]>div{font-size:1.7rem!important;font-weight:800!important;color:#111827!important}
+section.main [data-testid="stMetricValue"]>div{
+  font-size:1.6rem!important;font-weight:800!important;color:#111827!important}
 
 /* ── Containers ── */
 [data-testid="stVerticalBlockBorderWrapper"]{
   background:#ffffff!important;border:1px solid #e5e7eb!important;
-  border-radius:12px!important;box-shadow:0 1px 4px rgba(0,0,0,.04)!important}
+  border-radius:12px!important;box-shadow:0 1px 3px rgba(0,0,0,.04)!important}
 
-/* ── Inputs ── */
-input,textarea,[data-testid="stTextInput"] input,[data-testid="stTextArea"] textarea{
+/* ── Inputs (main) ── */
+section.main input,section.main textarea{
   background:#fff!important;border:1.5px solid #d1d5db!important;
   border-radius:8px!important;color:#111827!important}
-input:focus,textarea:focus{border-color:#f59e0b!important;box-shadow:0 0 0 3px rgba(245,158,11,.12)!important}
-input::placeholder,textarea::placeholder{color:#9ca3af!important}
+section.main input:focus,section.main textarea:focus{
+  border-color:#f59e0b!important;box-shadow:0 0 0 3px rgba(245,158,11,.1)!important}
+section.main input::placeholder,section.main textarea::placeholder{color:#9ca3af!important}
 [data-baseweb="select"]>div{background:#fff!important;border-color:#d1d5db!important;color:#111827!important}
 [data-baseweb="popover"],[data-baseweb="menu"]{
   background:#fff!important;border:1px solid #e5e7eb!important;
@@ -112,18 +136,15 @@ input::placeholder,textarea::placeholder{color:#9ca3af!important}
   background:#fff!important;border:1px solid #d1d5db!important;
   color:#374151!important;border-radius:6px!important}
 
-/* ── Expander: prevent header overlap with first widget ── */
-[data-testid="stExpander"]{position:relative!important}
+/* ── Expanders ── */
 [data-testid="stExpander"] summary{
-  position:relative!important;z-index:10!important;
-  background:#ffffff!important;border-radius:8px!important;
-  border:1px solid #e5e7eb!important;padding:10px 16px!important;
-  font-weight:600!important;color:#111827!important}
-[data-testid="stExpander"] summary:hover{background:#f9fafb!important}
+  background:#f9fafb!important;border:1px solid #e5e7eb!important;
+  border-radius:8px!important;padding:10px 16px!important;
+  font-weight:600!important;color:#374151!important}
+[data-testid="stExpander"] summary:hover{background:#f3f4f6!important}
 [data-testid="stExpander"]>div:last-child{
-  padding-top:16px!important;margin-top:4px!important;
   border:1px solid #e5e7eb!important;border-top:none!important;
-  border-radius:0 0 8px 8px!important;background:#ffffff!important}
+  border-radius:0 0 8px 8px!important}
 
 /* ── Misc ── */
 [data-testid="stProgress"]>div>div{background:#f59e0b!important}
@@ -135,8 +156,9 @@ hr{border-color:#e5e7eb!important}
 [data-testid="stRadio"] label{color:#374151!important}
 .stCaption,[data-testid="stCaptionContainer"],small{color:#6b7280!important}
 [data-testid="stSlider"] [data-baseweb="slider"] [role="slider"]{background:#f59e0b!important}
-p,span,label,div,h1,h2,h3,h4,li{color:#111827!important}
-.stMarkdown p,.stMarkdown span{color:#374151!important}
+
+/* ── Suppress deprecation noise from stApp level ── */
+[data-testid="stStatusWidget"]{display:none!important}
 </style>
 """, unsafe_allow_html=True)
 
@@ -203,42 +225,88 @@ NAV = [
 ]
 
 with st.sidebar:
-    st.markdown('<div style="padding:8px 0 4px"><span style="font-size:1.3rem;font-weight:800;color:#f59e0b">⚡ Semantix</span></div>', unsafe_allow_html=True)
-    st.markdown('<div style="font-size:.75rem;color:#64748b;margin-bottom:16px;letter-spacing:.05em;text-transform:uppercase">Video Intelligence</div>', unsafe_allow_html=True)
+    # Brand
+    st.markdown("""
+    <div style="padding:20px 4px 8px">
+      <div style="font-size:1.4rem;font-weight:800;color:#f59e0b;letter-spacing:-.02em">⚡ Semantix</div>
+      <div style="font-size:.7rem;color:#475569;letter-spacing:.1em;text-transform:uppercase;margin-top:2px">Video Intelligence</div>
+    </div>""", unsafe_allow_html=True)
 
+    # Nav
+    st.markdown('<div style="margin:8px 0 4px">', unsafe_allow_html=True)
     for pid, icon, label in NAV:
         active = st.session_state.page == pid
         if active:
-            st.button(f"{icon}  {label}", key=f"nav_{pid}", use_container_width=True, type="primary")
+            st.markdown(
+                f'<div style="background:rgba(245,158,11,.15);border-left:3px solid #f59e0b;'
+                f'border-radius:0 8px 8px 0;padding:10px 16px;margin:2px 0;'
+                f'font-size:.875rem;font-weight:600;color:#fbbf24">{icon}  {label}</div>',
+                unsafe_allow_html=True)
+            # invisible button so Streamlit still tracks the active page
+            st.button(f"{icon}  {label}", key=f"nav_{pid}", disabled=True,
+                      help=None, use_container_width=True)
         else:
             if st.button(f"{icon}  {label}", key=f"nav_{pid}", use_container_width=True):
                 st.session_state.page = pid
-                _sync_qp()
-                st.rerun()
+                _sync_qp(); st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div style="height:1px;background:#1e293b;margin:16px 0"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="height:1px;background:#1e293b;margin:14px 0 12px"></div>',
+                unsafe_allow_html=True)
 
     # Library stats
-    n_vids = len(st.session_state.videos)
+    n_vids   = len(st.session_state.videos)
     n_scenes = sum(v.scene_count for v in st.session_state.videos.values())
     if n_vids:
-        c1, c2 = st.columns(2)
-        c1.metric("Videos", n_vids)
-        c2.metric("Scenes", n_scenes)
+        st.markdown(
+            f'<div style="display:flex;gap:8px;margin-bottom:10px">'
+            f'<div style="flex:1;background:#1e293b;border-radius:8px;padding:10px 12px;text-align:center">'
+            f'<div style="font-size:1.3rem;font-weight:800;color:#f1f5f9">{n_vids}</div>'
+            f'<div style="font-size:.65rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em">Videos</div>'
+            f'</div>'
+            f'<div style="flex:1;background:#1e293b;border-radius:8px;padding:10px 12px;text-align:center">'
+            f'<div style="font-size:1.3rem;font-weight:800;color:#f1f5f9">{n_scenes}</div>'
+            f'<div style="font-size:.65rem;color:#64748b;text-transform:uppercase;letter-spacing:.06em">Scenes</div>'
+            f'</div></div>', unsafe_allow_html=True)
 
         # Active video selector
-        vms = list(st.session_state.videos.values())
-        labels = [vm.title[:26] + ("…" if len(vm.title)>26 else "") for vm in vms]
-        idx = st.selectbox("Active", range(len(vms)), format_func=lambda i: labels[i], key="vm_sel")
-        st.session_state.selected_video = vms[idx].video_id
+        vms    = list(st.session_state.videos.values())
+        labels = [vm.title[:28] + ("…" if len(vm.title) > 28 else "") for vm in vms]
+        idx    = st.selectbox("Active video", range(len(vms)),
+                              format_func=lambda i: labels[i], key="vm_sel",
+                              label_visibility="collapsed")
+        # Show active video info
+        active_vm_obj = vms[idx]
+        st.session_state.selected_video = active_vm_obj.video_id
+        ai_meta = st.session_state.ai_meta.get(active_vm_obj.video_id, {})
+        rating  = ai_meta.get("content_rating","")
+        genre   = ai_meta.get("primary_genre","")
+        chips   = ""
+        if rating: chips += f'<span style="background:#f59e0b22;color:#fbbf24;font-size:.65rem;font-weight:700;padding:2px 7px;border-radius:10px">{rating}</span> '
+        if genre:  chips += f'<span style="background:#1e293b;color:#94a3b8;font-size:.65rem;padding:2px 7px;border-radius:10px">{genre}</span>'
+        if chips: st.markdown(f'<div style="margin:4px 0 8px">{chips}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="font-size:.72rem;color:#64748b;line-height:1.5">'
+            f'{active_vm_obj.fmt_duration()} · {active_vm_obj.scene_count} scenes · '
+            f'{active_vm_obj.narrative_structure}</div>', unsafe_allow_html=True)
     else:
-        st.caption("No videos yet — go to Library")
+        st.markdown(
+            '<div style="font-size:.8rem;color:#475569;padding:8px 4px">'
+            'No videos yet — add one in Library</div>', unsafe_allow_html=True)
 
-    st.markdown('<div style="height:1px;background:#1e293b;margin:16px 0"></div>', unsafe_allow_html=True)
-    yt = st.text_input("YouTube API Key", type="password",
-                       value=st.session_state.yt_api_key, placeholder="Optional", key="yt_key_in")
+    st.markdown('<div style="height:1px;background:#1e293b;margin:14px 0 10px"></div>',
+                unsafe_allow_html=True)
+
+    # YouTube API key
+    st.markdown('<div style="font-size:.72rem;color:#475569;margin-bottom:4px">YouTube API Key</div>',
+                unsafe_allow_html=True)
+    yt = st.text_input("yt_key", type="password", value=st.session_state.yt_api_key,
+                       placeholder="Optional", key="yt_key_in", label_visibility="collapsed")
     if yt != st.session_state.yt_api_key:
         st.session_state.yt_api_key = yt
+    st.markdown('<div style="font-size:.65rem;color:#334155;margin-top:2px">Enables richer YouTube metadata</div>',
+                unsafe_allow_html=True)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SHARED HELPERS
@@ -402,6 +470,7 @@ def _show_ai_meta(vm: VideoMetadata):
         st.rerun()
 
 
+def _register(vm: VideoMetadata):
     st.session_state.videos[vm.video_id] = vm
     st.session_state.search_engine.add_scenes(vm.scenes)
     if st.session_state.search_engine.vectorizer is not None:
