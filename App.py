@@ -27,138 +27,284 @@ st.set_page_config(
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DESIGN SYSTEM
+# DESIGN SYSTEM — Clean light theme, dark sidebar
 # ══════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-*,html,body,[class*="css"]{font-family:'Inter',sans-serif!important}
-#MainMenu,footer{visibility:hidden}
 
-/* ── App shell ── */
-.stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"],[data-testid="block-container"]{
-  background:#ffffff!important;color:#111827!important}
-[data-testid="block-container"]{padding:1.5rem 2.5rem 3rem!important;max-width:1380px!important}
+/* ── Global font only — no color overrides ── */
+html, body, [class*="css"], * { font-family: 'Inter', sans-serif !important; }
+#MainMenu, footer, [data-testid="stStatusWidget"] { visibility: hidden !important; display: none !important; }
 
-/* ── Sidebar ── */
-[data-testid="stSidebar"],[data-testid="stSidebar"]>div:first-child{
-  background:#0f172a!important;border-right:1px solid #1e293b!important}
+/* ══ APP SHELL — pure white light theme ══ */
+.stApp { background: #f8fafc !important; }
+[data-testid="stAppViewContainer"] { background: #f8fafc !important; }
+[data-testid="stMain"] { background: #f8fafc !important; }
+[data-testid="block-container"] {
+  background: #f8fafc !important;
+  padding: 1.5rem 2.5rem 3rem !important;
+  max-width: 1380px !important;
+}
 
-/* Text in sidebar */
-[data-testid="stSidebar"] p,
-[data-testid="stSidebar"] span:not(.stMarkdown span),
-[data-testid="stSidebar"] label,
-[data-testid="stSidebar"] small{color:#64748b!important}
+/* ══ SIDEBAR — intentional dark navy ══ */
+[data-testid="stSidebar"] > div:first-child {
+  background: #0f172a !important;
+  border-right: 1px solid #1e293b !important;
+}
 
-/* Sidebar nav buttons — inactive */
-[data-testid="stSidebar"] .stButton>button{
-  width:100%!important;text-align:left!important;justify-content:flex-start!important;
-  background:transparent!important;border:none!important;border-radius:8px!important;
-  color:#94a3b8!important;font-size:.875rem!important;font-weight:500!important;
-  padding:.55rem 1rem!important;box-shadow:none!important;
-  transition:background .12s,color .12s!important;margin:1px 0!important}
-[data-testid="stSidebar"] .stButton>button:hover{
-  background:rgba(255,255,255,.06)!important;color:#e2e8f0!important}
+/* Sidebar text — scoped tightly, no bleed */
+[data-testid="stSidebar"] p { color: #94a3b8 !important; font-size: .8rem !important; }
+[data-testid="stSidebar"] label { color: #64748b !important; font-size: .75rem !important; }
+[data-testid="stSidebar"] small { color: #64748b !important; }
 
-/* Hide the disabled active-page button (we render the active state as HTML) */
-[data-testid="stSidebar"] .stButton>button:disabled{
-  display:none!important}
+/* Sidebar nav buttons */
+[data-testid="stSidebar"] .stButton > button {
+  width: 100% !important;
+  text-align: left !important;
+  justify-content: flex-start !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 8px !important;
+  color: #94a3b8 !important;
+  font-size: .875rem !important;
+  font-weight: 500 !important;
+  padding: .55rem 1rem !important;
+  box-shadow: none !important;
+  transition: background .12s, color .12s !important;
+  margin: 1px 0 !important;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+  background: rgba(255,255,255,.07) !important;
+  color: #e2e8f0 !important;
+}
+[data-testid="stSidebar"] .stButton > button:disabled { display: none !important; }
 
-/* Sidebar selectbox styling */
-[data-testid="stSidebar"] [data-baseweb="select"]>div{
-  background:#1e293b!important;border-color:#334155!important;
-  color:#e2e8f0!important;border-radius:8px!important}
-[data-testid="stSidebar"] [data-baseweb="select"] span{color:#e2e8f0!important}
+/* Sidebar selectbox */
+[data-testid="stSidebar"] [data-baseweb="select"] > div {
+  background: #1e293b !important;
+  border-color: #334155 !important;
+  color: #e2e8f0 !important;
+  border-radius: 8px !important;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] span { color: #e2e8f0 !important; }
+[data-testid="stSidebar"] [data-baseweb="select"] svg { fill: #64748b !important; }
 
-/* Sidebar text input (API key) */
-[data-testid="stSidebar"] input{
-  background:#1e293b!important;border-color:#334155!important;
-  color:#e2e8f0!important;border-radius:8px!important}
-[data-testid="stSidebar"] input::placeholder{color:#475569!important}
+/* Sidebar input (API key) */
+[data-testid="stSidebar"] input {
+  background: #1e293b !important;
+  border: 1px solid #334155 !important;
+  color: #e2e8f0 !important;
+  border-radius: 8px !important;
+}
+[data-testid="stSidebar"] input::placeholder { color: #475569 !important; }
 
-/* ── Main content buttons ── */
-section.main .stButton>button{
-  background:#f59e0b!important;color:#111!important;border:none!important;
-  border-radius:8px!important;font-weight:600!important;padding:.5rem 1.3rem!important;
-  box-shadow:0 1px 3px rgba(245,158,11,.25)!important;transition:all .12s!important}
-section.main .stButton>button:hover{
-  background:#d97706!important;transform:translateY(-1px)!important;
-  box-shadow:0 3px 10px rgba(245,158,11,.3)!important}
-section.main .stButton>button:disabled{
-  background:#e5e7eb!important;color:#9ca3af!important;
-  box-shadow:none!important;transform:none!important}
+/* ══ MAIN CONTENT — everything light ══ */
 
-/* ── Tabs ── */
-[data-testid="stTabs"] [data-baseweb="tab-list"]{
-  background:#f3f4f6!important;border:1px solid #e5e7eb!important;
-  border-radius:10px!important;padding:4px!important;gap:2px!important}
-[data-testid="stTabs"] [data-baseweb="tab"]{
-  background:transparent!important;color:#6b7280!important;border-radius:7px!important;
-  font-size:.82rem!important;font-weight:500!important;border:none!important;
-  padding:6px 14px!important;transition:all .12s!important}
-[data-testid="stTabs"] [aria-selected="true"]{
-  background:#f59e0b!important;color:#111!important;font-weight:700!important}
+/* Page-level text colours — scoped to main only */
+section.main { color: #111827 !important; }
+section.main h1, section.main h2, section.main h3,
+section.main h4, section.main h5, section.main h6 { color: #111827 !important; }
+section.main p, section.main span, section.main div { color: inherit; }
+section.main label { color: #374151 !important; }
 
-/* ── Metric cards (main content only) ── */
-section.main [data-testid="stMetric"]{
-  background:#f9fafb!important;border:1px solid #e5e7eb!important;
-  border-radius:12px!important;padding:.9rem 1.1rem!important}
-section.main [data-testid="stMetricLabel"]>div{
-  font-size:.65rem!important;font-weight:700!important;letter-spacing:.07em!important;
-  text-transform:uppercase!important;color:#9ca3af!important}
-section.main [data-testid="stMetricValue"]>div{
-  font-size:1.6rem!important;font-weight:800!important;color:#111827!important}
+/* Buttons — amber primary */
+section.main .stButton > button {
+  background: #f59e0b !important;
+  color: #111827 !important;
+  border: none !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  padding: .48rem 1.2rem !important;
+  box-shadow: 0 1px 3px rgba(245,158,11,.2) !important;
+  transition: all .15s ease !important;
+}
+section.main .stButton > button:hover {
+  background: #d97706 !important;
+  color: #111827 !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 12px rgba(245,158,11,.3) !important;
+}
+section.main .stButton > button:active { transform: translateY(0) !important; }
+section.main .stButton > button:disabled {
+  background: #e5e7eb !important;
+  color: #9ca3af !important;
+  box-shadow: none !important;
+  transform: none !important;
+  cursor: not-allowed !important;
+}
 
-/* ── Containers ── */
-[data-testid="stVerticalBlockBorderWrapper"]{
-  background:#ffffff!important;border:1px solid #e5e7eb!important;
-  border-radius:12px!important;box-shadow:0 1px 3px rgba(0,0,0,.04)!important}
+/* Tabs */
+[data-testid="stTabs"] [data-baseweb="tab-list"] {
+  background: #f1f5f9 !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 10px !important;
+  padding: 4px !important;
+  gap: 2px !important;
+}
+[data-testid="stTabs"] [data-baseweb="tab"] {
+  background: transparent !important;
+  color: #64748b !important;
+  border-radius: 7px !important;
+  font-size: .82rem !important;
+  font-weight: 500 !important;
+  border: none !important;
+  padding: 6px 14px !important;
+  transition: all .12s !important;
+}
+[data-testid="stTabs"] [aria-selected="true"] {
+  background: #f59e0b !important;
+  color: #111827 !important;
+  font-weight: 700 !important;
+}
 
-/* ── Inputs (main) ── */
-section.main input,section.main textarea{
-  background:#fff!important;border:1.5px solid #d1d5db!important;
-  border-radius:8px!important;color:#111827!important}
-section.main input:focus,section.main textarea:focus{
-  border-color:#f59e0b!important;box-shadow:0 0 0 3px rgba(245,158,11,.1)!important}
-section.main input::placeholder,section.main textarea::placeholder{color:#9ca3af!important}
-[data-baseweb="select"]>div{background:#fff!important;border-color:#d1d5db!important;color:#111827!important}
-[data-baseweb="popover"],[data-baseweb="menu"]{
-  background:#fff!important;border:1px solid #e5e7eb!important;
-  box-shadow:0 4px 20px rgba(0,0,0,.1)!important}
-[role="option"]{background:#fff!important;color:#111827!important}
-[role="option"]:hover{background:#f9fafb!important}
+/* Metrics — light card */
+section.main [data-testid="stMetric"] {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  padding: .9rem 1.1rem !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,.04) !important;
+}
+section.main [data-testid="stMetricLabel"] > div {
+  font-size: .65rem !important;
+  font-weight: 700 !important;
+  letter-spacing: .07em !important;
+  text-transform: uppercase !important;
+  color: #94a3b8 !important;
+}
+section.main [data-testid="stMetricValue"] > div {
+  font-size: 1.55rem !important;
+  font-weight: 800 !important;
+  color: #0f172a !important;
+}
+section.main [data-testid="stMetricDelta"] { color: #16a34a !important; }
 
-/* ── File uploader ── */
-[data-testid="stFileUploaderDropzone"]{
-  background:#fafafa!important;border:2px dashed #d1d5db!important;border-radius:10px!important}
-[data-testid="stFileUploaderDropzone"] *{color:#6b7280!important}
-[data-testid="stFileUploaderDropzone"] button{
-  background:#fff!important;border:1px solid #d1d5db!important;
-  color:#374151!important;border-radius:6px!important}
+/* Bordered containers */
+[data-testid="stVerticalBlockBorderWrapper"] {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,.04) !important;
+}
 
-/* ── Expanders ── */
-[data-testid="stExpander"] summary{
-  background:#f9fafb!important;border:1px solid #e5e7eb!important;
-  border-radius:8px!important;padding:10px 16px!important;
-  font-weight:600!important;color:#374151!important}
-[data-testid="stExpander"] summary:hover{background:#f3f4f6!important}
-[data-testid="stExpander"]>div:last-child{
-  border:1px solid #e5e7eb!important;border-top:none!important;
-  border-radius:0 0 8px 8px!important}
+/* Inputs & textareas — main only */
+section.main input,
+section.main textarea {
+  background: #ffffff !important;
+  border: 1.5px solid #d1d5db !important;
+  border-radius: 8px !important;
+  color: #111827 !important;
+}
+section.main input:focus, section.main textarea:focus {
+  border-color: #f59e0b !important;
+  box-shadow: 0 0 0 3px rgba(245,158,11,.12) !important;
+  outline: none !important;
+}
+section.main input::placeholder,
+section.main textarea::placeholder { color: #9ca3af !important; }
 
-/* ── Misc ── */
-[data-testid="stProgress"]>div>div{background:#f59e0b!important}
-[data-testid="stProgress"]>div{background:#f3f4f6!important}
-[data-testid="stAlert"]{border-radius:10px!important}
-hr{border-color:#e5e7eb!important}
-[data-testid="stDataFrame"]{border:1px solid #e5e7eb!important;border-radius:10px!important}
-[data-testid="stPlotlyChart"]{border:1px solid #e5e7eb!important;border-radius:12px!important;overflow:hidden!important}
-[data-testid="stRadio"] label{color:#374151!important}
-.stCaption,[data-testid="stCaptionContainer"],small{color:#6b7280!important}
-[data-testid="stSlider"] [data-baseweb="slider"] [role="slider"]{background:#f59e0b!important}
+/* Selectbox / dropdowns — main only (not sidebar) */
+section.main [data-baseweb="select"] > div {
+  background: #ffffff !important;
+  border-color: #d1d5db !important;
+  color: #111827 !important;
+  border-radius: 8px !important;
+}
+section.main [data-baseweb="select"] span { color: #111827 !important; }
 
-/* ── Suppress deprecation noise from stApp level ── */
-[data-testid="stStatusWidget"]{display:none!important}
+/* Dropdown menu (popover) — always light */
+[data-baseweb="popover"], [data-baseweb="menu"] {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,.1) !important;
+  border-radius: 8px !important;
+}
+[role="option"] {
+  background: #ffffff !important;
+  color: #111827 !important;
+}
+[role="option"]:hover, [role="option"][aria-selected="true"] {
+  background: #fef3c7 !important;
+  color: #92400e !important;
+}
+
+/* File uploader */
+[data-testid="stFileUploaderDropzone"] {
+  background: #f8fafc !important;
+  border: 2px dashed #cbd5e1 !important;
+  border-radius: 10px !important;
+}
+[data-testid="stFileUploaderDropzone"] p,
+[data-testid="stFileUploaderDropzone"] span { color: #64748b !important; }
+[data-testid="stFileUploaderDropzone"] button {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #374151 !important;
+  border-radius: 6px !important;
+}
+
+/* Expanders */
+section.main [data-testid="stExpander"] summary {
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 8px !important;
+  padding: 10px 16px !important;
+  font-weight: 600 !important;
+  color: #374151 !important;
+}
+section.main [data-testid="stExpander"] summary:hover { background: #f1f5f9 !important; }
+section.main [data-testid="stExpander"] > div:last-child {
+  border: 1px solid #e2e8f0 !important;
+  border-top: none !important;
+  border-radius: 0 0 8px 8px !important;
+  background: #ffffff !important;
+}
+
+/* Progress bar */
+[data-testid="stProgress"] > div { background: #f1f5f9 !important; border-radius: 4px !important; }
+[data-testid="stProgress"] > div > div { background: #f59e0b !important; border-radius: 4px !important; }
+
+/* Slider */
+[data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] { background: #f59e0b !important; }
+[data-testid="stSlider"] [data-baseweb="slider"] [data-testid="stThumbValue"] { color: #92400e !important; }
+
+/* Radio buttons */
+section.main [data-testid="stRadio"] label { color: #374151 !important; }
+section.main [data-testid="stRadio"] [data-baseweb="radio"] div { border-color: #d1d5db !important; }
+
+/* Captions */
+section.main [data-testid="stCaptionContainer"],
+section.main .stCaption { color: #6b7280 !important; font-size: .8rem !important; }
+
+/* Divider */
+hr { border-color: #e2e8f0 !important; margin: 1rem 0 !important; }
+
+/* Alerts */
+[data-testid="stAlert"] { border-radius: 10px !important; }
+section.main [data-testid="stAlert"] p { color: inherit !important; }
+
+/* DataFrame */
+[data-testid="stDataFrame"] {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 10px !important;
+  overflow: hidden !important;
+}
+
+/* Plotly */
+[data-testid="stPlotlyChart"] {
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+}
+
+/* Status widget */
+[data-testid="stStatus"] {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 10px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -270,14 +416,26 @@ with st.sidebar:
             f'</div></div>', unsafe_allow_html=True)
 
         # Active video selector
-        vms    = list(st.session_state.videos.values())
-        labels = [vm.title[:28] + ("…" if len(vm.title) > 28 else "") for vm in vms]
-        idx    = st.selectbox("Active video", range(len(vms)),
-                              format_func=lambda i: labels[i], key="vm_sel",
-                              label_visibility="collapsed")
-        # Show active video info
+        # CRITICAL FIX: selectbox must be DRIVEN BY selected_video, not overwrite it.
+        # When "Analyse" is clicked on video 2, selected_video = video2_id.
+        # We must force vm_sel to that index BEFORE Streamlit renders the widget,
+        # otherwise it stays at 0 (video 1) and overwrites the user's selection.
+        vms     = list(st.session_state.videos.values())
+        vid_ids = [vm.video_id for vm in vms]
+        labels  = [vm.title[:28] + ("…" if len(vm.title) > 28 else "") for vm in vms]
+        cur_sel = st.session_state.get("selected_video")
+        correct_idx = vid_ids.index(cur_sel) if cur_sel in vid_ids else 0
+        # Force widget state to match selected_video before rendering
+        st.session_state["vm_sel"] = correct_idx
+        idx = st.selectbox("Active video", range(len(vms)),
+                           format_func=lambda i: labels[i], key="vm_sel",
+                           label_visibility="collapsed")
+        # If user manually changes sidebar selector, propagate that choice
+        chosen_vid = vid_ids[idx]
+        if chosen_vid != st.session_state.selected_video:
+            st.session_state.selected_video = chosen_vid
+            _sync_qp()
         active_vm_obj = vms[idx]
-        st.session_state.selected_video = active_vm_obj.video_id
         ai_meta = st.session_state.ai_meta.get(active_vm_obj.video_id, {})
         rating  = ai_meta.get("content_rating","")
         genre   = ai_meta.get("primary_genre","")
@@ -471,17 +629,28 @@ def _show_ai_meta(vm: VideoMetadata):
 
 
 def _register(vm: VideoMetadata):
+    """Add video to library and make it the active selection."""
     st.session_state.videos[vm.video_id] = vm
     st.session_state.search_engine.add_scenes(vm.scenes)
     if st.session_state.search_engine.vectorizer is not None:
         st.session_state.ad_engine.sync_vectorizer(st.session_state.search_engine.vectorizer)
     st.session_state.selected_video = vm.video_id
+    # Reset vm_sel so sidebar selectbox syncs to this new video on next render
+    vids = list(st.session_state.videos.keys())
+    st.session_state["vm_sel"] = vids.index(vm.video_id) if vm.video_id in vids else 0
 
 def _active_vm() -> Optional[VideoMetadata]:
-    if st.session_state.selected_video:
-        vm = st.session_state.videos.get(st.session_state.selected_video)
-        if vm: return vm
-    return next(iter(st.session_state.videos.values()), None)
+    """Return the currently selected VideoMetadata, or fall back to first in library."""
+    sel = st.session_state.get("selected_video")
+    if sel:
+        vm = st.session_state.videos.get(sel)
+        if vm:
+            return vm
+    # Fallback: first video in library
+    vm = next(iter(st.session_state.videos.values()), None)
+    if vm:
+        st.session_state.selected_video = vm.video_id
+    return vm
 
 def _yt_id(url: str) -> Optional[str]:
     for p in [r"(?:v=|youtu\.be/|embed/|shorts/)([A-Za-z0-9_-]{11})", r"^([A-Za-z0-9_-]{11})$"]:
@@ -884,25 +1053,31 @@ def _library_card(vm: VideoMetadata):
 
         # Actions
         a1,a2,a3,a4,a5 = st.columns(5)
-        if a1.button("🔬 Analyse", key=f"lib_an_{vm.video_id}"):
-            st.session_state.selected_video = vm.video_id
-            st.session_state.page = "analyse"; st.rerun()
+
+        def _nav_to(vid_id, page):
+            """Set selected video + update vm_sel so sidebar syncs immediately."""
+            st.session_state.selected_video = vid_id
+            vids = list(st.session_state.videos.keys())
+            st.session_state["vm_sel"] = vids.index(vid_id) if vid_id in vids else 0
+            st.session_state.page = page
+            _sync_qp()
+
+        if a1.button("🔬 Analyse",  key=f"lib_an_{vm.video_id}"):
+            _nav_to(vm.video_id, "analyse");  st.rerun()
         if a2.button("📢 Monetise", key=f"lib_mo_{vm.video_id}"):
-            st.session_state.selected_video = vm.video_id
-            st.session_state.page = "monetise"; st.rerun()
+            _nav_to(vm.video_id, "monetise"); st.rerun()
         if a3.button("📊 Insights", key=f"lib_in_{vm.video_id}"):
-            st.session_state.selected_video = vm.video_id
-            st.session_state.page = "insights"; st.rerun()
-        if a4.button("✨ AI Meta", key=f"lib_ai_{vm.video_id}"):
-            st.session_state.selected_video = vm.video_id
-            st.session_state.page = "analyse"; st.rerun()
-        if a5.button("🗑 Remove", key=f"lib_dl_{vm.video_id}"):
+            _nav_to(vm.video_id, "insights"); st.rerun()
+        if a4.button("✨ AI Meta",  key=f"lib_ai_{vm.video_id}"):
+            _nav_to(vm.video_id, "analyse");  st.rerun()
+        if a5.button("🗑 Remove",   key=f"lib_dl_{vm.video_id}"):
             del st.session_state.videos[vm.video_id]
             for d in [st.session_state.video_b64, st.session_state.video_mime,
                       st.session_state.ad_markers, st.session_state.ai_meta]:
                 d.pop(vm.video_id, None)
             if st.session_state.selected_video == vm.video_id:
                 st.session_state.selected_video = next(iter(st.session_state.videos), None)
+            st.session_state.pop("vm_sel", None)   # force sidebar to recompute
             st.rerun()
 
 
