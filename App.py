@@ -27,335 +27,172 @@ st.set_page_config(
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DESIGN SYSTEM — Production-grade: light main + clean sidebar
+# DESIGN SYSTEM — Fully light theme. No dark sidebar.
 # ══════════════════════════════════════════════════════════════════════════════
 _CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-/* ── Reset & font ── */
-html, body { font-family: 'Inter', sans-serif !important; }
-* { font-family: inherit !important; box-sizing: border-box; }
-#MainMenu, footer { display: none !important; }
-[data-testid="stStatusWidget"] { display: none !important; }
-[data-testid="stDecoration"] { display: none !important; }
+html, body, * { font-family: 'Inter', sans-serif !important; box-sizing: border-box; }
+#MainMenu, footer, [data-testid="stStatusWidget"], [data-testid="stDecoration"] { display: none !important; }
 
-/* ══════════════════════════════════════
-   APP SHELL — light background
-══════════════════════════════════════ */
-.stApp,
-[data-testid="stAppViewContainer"],
-[data-testid="stMain"] {
-  background: #f1f5f9 !important;
-}
-[data-testid="block-container"] {
-  background: #f1f5f9 !important;
-  padding: 2rem 2.5rem 4rem !important;
-  max-width: 1400px !important;
-}
+/* ── App shell ── */
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] { background: #f1f5f9 !important; }
+[data-testid="block-container"] { background: #f1f5f9 !important; padding: 2rem 2.5rem 4rem !important; max-width: 1400px !important; }
 
-/* ══════════════════════════════════════
-   SIDEBAR — clean slate-900
-══════════════════════════════════════ */
-[data-testid="stSidebar"] { min-width: 240px !important; max-width: 280px !important; }
+/* ── Sidebar — clean white ── */
 [data-testid="stSidebar"] > div:first-child {
-  background: #0f172a !important;
-  border-right: 1px solid rgba(255,255,255,.06) !important;
-  padding-top: 0 !important;
+  background: #ffffff !important;
+  border-right: 1px solid #e2e8f0 !important;
+  box-shadow: 2px 0 8px rgba(0,0,0,.04) !important;
 }
-/* All sidebar text defaults */
-[data-testid="stSidebar"] * { color: #94a3b8 !important; }
+[data-testid="stSidebar"] { background: #ffffff !important; }
+
 /* Sidebar nav buttons */
 [data-testid="stSidebar"] .stButton > button {
-  width: 100% !important;
-  text-align: left !important;
-  justify-content: flex-start !important;
-  background: transparent !important;
-  border: none !important;
-  border-radius: 8px !important;
-  color: #94a3b8 !important;
-  font-size: .875rem !important;
-  font-weight: 500 !important;
-  padding: .6rem 1rem !important;
-  box-shadow: none !important;
-  transition: all .15s !important;
-  margin: 2px 0 !important;
-  letter-spacing: .01em !important;
+  width: 100% !important; text-align: left !important; justify-content: flex-start !important;
+  background: transparent !important; border: none !important; border-radius: 8px !important;
+  color: #64748b !important; font-size: .875rem !important; font-weight: 500 !important;
+  padding: .6rem 1rem !important; box-shadow: none !important;
+  transition: all .15s !important; margin: 2px 0 !important;
 }
-[data-testid="stSidebar"] .stButton > button:hover {
-  background: rgba(248,250,252,.08) !important;
-  color: #f1f5f9 !important;
-}
+[data-testid="stSidebar"] .stButton > button:hover { background: #f8fafc !important; color: #1e293b !important; }
 [data-testid="stSidebar"] .stButton > button:disabled { display: none !important; }
 
 /* Sidebar selectbox */
 [data-testid="stSidebar"] [data-baseweb="select"] > div {
-  background: #1e293b !important;
-  border: 1px solid #334155 !important;
-  border-radius: 8px !important;
-  color: #e2e8f0 !important;
+  background: #f8fafc !important; border: 1px solid #e2e8f0 !important;
+  border-radius: 8px !important; color: #1e293b !important;
 }
-[data-testid="stSidebar"] [data-baseweb="select"] span { color: #e2e8f0 !important; }
-[data-testid="stSidebar"] [data-baseweb="select"] svg { color: #64748b !important; fill: #64748b !important; }
+[data-testid="stSidebar"] [data-baseweb="select"] span { color: #1e293b !important; }
 
-/* Sidebar text input */
+/* Sidebar input */
 [data-testid="stSidebar"] input {
-  background: #1e293b !important;
-  border: 1px solid #334155 !important;
-  border-radius: 8px !important;
-  color: #e2e8f0 !important;
-  caret-color: #f59e0b !important;
+  background: #f8fafc !important; border: 1px solid #e2e8f0 !important;
+  border-radius: 8px !important; color: #1e293b !important;
 }
-[data-testid="stSidebar"] input::placeholder { color: #475569 !important; }
-[data-testid="stSidebar"] [data-baseweb="input"] { background: transparent !important; }
+[data-testid="stSidebar"] input::placeholder { color: #94a3b8 !important; }
 
-/* ══════════════════════════════════════
-   MAIN CONTENT — clean white cards on slate bg
-══════════════════════════════════════ */
-section.main { background: #f1f5f9 !important; }
-section.main h1,
-section.main h2,
-section.main h3,
-section.main h4 { color: #0f172a !important; font-weight: 700 !important; }
+/* ── Main content ── */
+section.main { background: #f1f5f9 !important; color: #1e293b !important; }
+section.main h1, section.main h2, section.main h3, section.main h4 { color: #0f172a !important; font-weight: 700 !important; }
+section.main label { color: #374151 !important; }
+section.main p { color: #374151 !important; }
 
-/* ── Buttons ── */
+/* Buttons — amber */
 section.main .stButton > button {
-  background: #f59e0b !important;
-  color: #111827 !important;
-  border: none !important;
-  border-radius: 8px !important;
-  font-weight: 600 !important;
-  font-size: .875rem !important;
-  padding: .5rem 1.25rem !important;
-  box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 1px 6px rgba(245,158,11,.15) !important;
-  transition: all .15s cubic-bezier(.4,0,.2,1) !important;
-  letter-spacing: .01em !important;
+  background: #f59e0b !important; color: #111827 !important; border: none !important;
+  border-radius: 8px !important; font-weight: 600 !important; font-size: .875rem !important;
+  padding: .5rem 1.25rem !important; box-shadow: 0 1px 2px rgba(0,0,0,.08) !important;
+  transition: all .15s !important;
 }
 section.main .stButton > button:hover {
-  background: #d97706 !important;
-  color: #111827 !important;
-  box-shadow: 0 4px 12px rgba(245,158,11,.35) !important;
+  background: #d97706 !important; box-shadow: 0 4px 12px rgba(245,158,11,.3) !important;
   transform: translateY(-1px) !important;
 }
-section.main .stButton > button:active {
-  transform: translateY(0) !important;
-  box-shadow: 0 1px 2px rgba(0,0,0,.1) !important;
-}
+section.main .stButton > button:active { transform: translateY(0) !important; }
 section.main .stButton > button:disabled {
-  background: #e2e8f0 !important;
-  color: #94a3b8 !important;
-  box-shadow: none !important;
-  transform: none !important;
+  background: #e2e8f0 !important; color: #94a3b8 !important;
+  box-shadow: none !important; transform: none !important;
 }
 
-/* ── Tabs ── */
+/* Tabs */
 [data-testid="stTabs"] [data-baseweb="tab-list"] {
-  background: #e2e8f0 !important;
-  border-radius: 10px !important;
-  padding: 3px !important;
-  gap: 2px !important;
-  border: none !important;
+  background: #e2e8f0 !important; border-radius: 10px !important; padding: 3px !important; gap: 2px !important; border: none !important;
 }
 [data-testid="stTabs"] [data-baseweb="tab"] {
-  background: transparent !important;
-  color: #475569 !important;
-  border-radius: 8px !important;
-  font-size: .82rem !important;
-  font-weight: 500 !important;
-  border: none !important;
-  padding: 6px 14px !important;
-  transition: all .12s !important;
+  background: transparent !important; color: #64748b !important; border-radius: 8px !important;
+  font-size: .82rem !important; font-weight: 500 !important; border: none !important; padding: 6px 14px !important;
 }
-[data-testid="stTabs"] [data-baseweb="tab"]:hover {
-  background: rgba(255,255,255,.6) !important;
-  color: #1e293b !important;
-}
+[data-testid="stTabs"] [data-baseweb="tab"]:hover { background: rgba(255,255,255,.7) !important; color: #1e293b !important; }
 [data-testid="stTabs"] [aria-selected="true"] {
-  background: #ffffff !important;
-  color: #111827 !important;
-  font-weight: 700 !important;
+  background: #ffffff !important; color: #111827 !important; font-weight: 700 !important;
   box-shadow: 0 1px 3px rgba(0,0,0,.1) !important;
 }
 
-/* ── Metrics ── */
+/* Metrics */
 section.main [data-testid="stMetric"] {
-  background: #ffffff !important;
-  border: 1px solid #e2e8f0 !important;
-  border-radius: 12px !important;
-  padding: 1rem 1.2rem !important;
+  background: #ffffff !important; border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important; padding: 1rem 1.2rem !important;
   box-shadow: 0 1px 3px rgba(0,0,0,.04) !important;
 }
 section.main [data-testid="stMetricLabel"] > div {
-  font-size: .65rem !important;
-  font-weight: 700 !important;
-  letter-spacing: .07em !important;
-  text-transform: uppercase !important;
-  color: #94a3b8 !important;
+  font-size: .65rem !important; font-weight: 700 !important; letter-spacing: .07em !important;
+  text-transform: uppercase !important; color: #94a3b8 !important;
 }
-section.main [data-testid="stMetricValue"] > div {
-  font-size: 1.6rem !important;
-  font-weight: 800 !important;
-  color: #0f172a !important;
-  line-height: 1.2 !important;
-}
+section.main [data-testid="stMetricValue"] > div { font-size: 1.6rem !important; font-weight: 800 !important; color: #0f172a !important; }
 
-/* ── Bordered containers ── */
+/* Containers */
 [data-testid="stVerticalBlockBorderWrapper"] {
-  background: #ffffff !important;
-  border: 1px solid #e2e8f0 !important;
-  border-radius: 12px !important;
-  box-shadow: 0 1px 3px rgba(0,0,0,.04) !important;
+  background: #ffffff !important; border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important; box-shadow: 0 1px 3px rgba(0,0,0,.04) !important;
 }
 
-/* ── Inputs ── */
-section.main input,
-section.main textarea {
-  background: #ffffff !important;
-  border: 1.5px solid #cbd5e1 !important;
-  border-radius: 8px !important;
-  color: #111827 !important;
-  font-size: .875rem !important;
+/* Inputs */
+section.main input, section.main textarea {
+  background: #ffffff !important; border: 1.5px solid #e2e8f0 !important;
+  border-radius: 8px !important; color: #111827 !important;
 }
-section.main input:focus,
-section.main textarea:focus {
-  border-color: #f59e0b !important;
-  box-shadow: 0 0 0 3px rgba(245,158,11,.12) !important;
-  outline: none !important;
+section.main input:focus, section.main textarea:focus {
+  border-color: #f59e0b !important; box-shadow: 0 0 0 3px rgba(245,158,11,.12) !important;
 }
-section.main input::placeholder,
-section.main textarea::placeholder { color: #94a3b8 !important; }
+section.main input::placeholder, section.main textarea::placeholder { color: #94a3b8 !important; }
 
-/* ── Selectbox (main content only) ── */
+/* Selectbox */
 section.main [data-baseweb="select"] > div {
-  background: #ffffff !important;
-  border: 1.5px solid #cbd5e1 !important;
-  border-radius: 8px !important;
-  color: #111827 !important;
+  background: #ffffff !important; border: 1.5px solid #e2e8f0 !important;
+  border-radius: 8px !important; color: #111827 !important;
 }
 section.main [data-baseweb="select"] span { color: #111827 !important; }
 
-/* Dropdown popover — always light */
-[data-baseweb="popover"],
-[data-baseweb="menu"] {
-  background: #ffffff !important;
-  border: 1px solid #e2e8f0 !important;
-  box-shadow: 0 10px 30px rgba(0,0,0,.12) !important;
-  border-radius: 10px !important;
+/* Dropdown */
+[data-baseweb="popover"], [data-baseweb="menu"] {
+  background: #ffffff !important; border: 1px solid #e2e8f0 !important;
+  box-shadow: 0 10px 30px rgba(0,0,0,.1) !important; border-radius: 10px !important;
 }
 [role="option"] { background: #ffffff !important; color: #111827 !important; }
 [role="option"]:hover { background: #fef9ee !important; }
 [role="option"][aria-selected="true"] { background: #fef3c7 !important; color: #92400e !important; }
 
-/* ── File uploader ── */
+/* File uploader */
 [data-testid="stFileUploaderDropzone"] {
-  background: #f8fafc !important;
-  border: 2px dashed #cbd5e1 !important;
-  border-radius: 10px !important;
+  background: #f8fafc !important; border: 2px dashed #e2e8f0 !important; border-radius: 10px !important;
 }
 [data-testid="stFileUploaderDropzone"] span { color: #64748b !important; }
 [data-testid="stFileUploaderDropzone"] button {
-  background: #ffffff !important;
-  border: 1px solid #e2e8f0 !important;
-  color: #374151 !important;
-  border-radius: 6px !important;
-}
-[data-testid="stFileUploaderDropzone"] button:hover {
-  background: #f8fafc !important;
+  background: #ffffff !important; border: 1px solid #e2e8f0 !important; color: #374151 !important; border-radius: 6px !important;
 }
 
-/* ── Expanders ── */
+/* Expanders */
 section.main [data-testid="stExpander"] summary {
-  background: #f8fafc !important;
-  border: 1px solid #e2e8f0 !important;
-  border-radius: 8px !important;
-  padding: 10px 16px !important;
-  font-weight: 600 !important;
-  color: #374151 !important;
-  font-size: .875rem !important;
+  background: #ffffff !important; border: 1px solid #e2e8f0 !important;
+  border-radius: 8px !important; padding: 10px 16px !important; font-weight: 600 !important; color: #374151 !important;
 }
-section.main [data-testid="stExpander"] summary:hover {
-  background: #f1f5f9 !important;
-}
+section.main [data-testid="stExpander"] summary:hover { background: #f8fafc !important; }
 section.main [data-testid="stExpander"] > div:last-child {
-  border: 1px solid #e2e8f0 !important;
-  border-top: none !important;
-  border-radius: 0 0 8px 8px !important;
-  background: #ffffff !important;
-  padding: 12px 16px !important;
+  border: 1px solid #e2e8f0 !important; border-top: none !important;
+  border-radius: 0 0 8px 8px !important; background: #ffffff !important;
 }
 
-/* ── Slider ── */
-[data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] {
-  background: #f59e0b !important;
-  border: 2px solid #ffffff !important;
-  box-shadow: 0 0 0 2px #f59e0b !important;
-}
-[data-testid="stSlider"] [data-baseweb="slider"] div[data-testid="stSliderTrack"] {
-  background: #e2e8f0 !important;
-}
-
-/* ── Progress ── */
+/* Misc */
 [data-testid="stProgress"] > div { background: #e2e8f0 !important; border-radius: 4px !important; }
 [data-testid="stProgress"] > div > div { background: #f59e0b !important; border-radius: 4px !important; }
-
-/* ── Radio ── */
-section.main [data-testid="stRadio"] label { color: #374151 !important; font-size: .875rem !important; }
-
-/* ── Caption ── */
-section.main [data-testid="stCaptionContainer"],
-section.main .stCaption,
-section.main small { color: #64748b !important; font-size: .8rem !important; }
-
-/* ── Divider ── */
-hr { border: none !important; border-top: 1px solid #e2e8f0 !important; margin: 1.25rem 0 !important; }
-
-/* ── Alerts ── */
-[data-testid="stAlert"] {
-  border-radius: 10px !important;
-  border-left-width: 4px !important;
-}
-
-/* ── DataFrame ── */
-[data-testid="stDataFrame"] {
-  border: 1px solid #e2e8f0 !important;
-  border-radius: 10px !important;
-  overflow: hidden !important;
-  background: #ffffff !important;
-}
-
-/* ── Plotly chart ── */
-[data-testid="stPlotlyChart"] {
-  border: 1px solid #e2e8f0 !important;
-  border-radius: 12px !important;
-  overflow: hidden !important;
-  background: #ffffff !important;
-}
-
-/* ── Status / spinner ── */
-[data-testid="stStatus"] {
-  background: #ffffff !important;
-  border: 1px solid #e2e8f0 !important;
-  border-radius: 10px !important;
-}
-
-/* ── Checkbox ── */
-section.main [data-baseweb="checkbox"] span { color: #374151 !important; }
-
-/* ── Link buttons ── */
+[data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] { background: #f59e0b !important; }
+section.main [data-testid="stRadio"] label { color: #374151 !important; }
+section.main [data-testid="stCaptionContainer"], section.main .stCaption { color: #64748b !important; font-size: .8rem !important; }
+hr { border: none !important; border-top: 1px solid #e2e8f0 !important; margin: 1rem 0 !important; }
+[data-testid="stAlert"] { border-radius: 10px !important; }
+[data-testid="stDataFrame"] { border: 1px solid #e2e8f0 !important; border-radius: 10px !important; overflow: hidden !important; }
+[data-testid="stPlotlyChart"] { border: 1px solid #e2e8f0 !important; border-radius: 12px !important; overflow: hidden !important; background: #ffffff !important; }
+[data-testid="stStatus"] { background: #ffffff !important; border: 1px solid #e2e8f0 !important; border-radius: 10px !important; }
 section.main a[data-testid="stLinkButton"] {
-  background: #f1f5f9 !important;
-  color: #374151 !important;
-  border: 1px solid #e2e8f0 !important;
-  border-radius: 8px !important;
-  font-weight: 500 !important;
-  text-decoration: none !important;
-}
-section.main a[data-testid="stLinkButton"]:hover {
-  background: #e2e8f0 !important;
+  background: #f1f5f9 !important; color: #374151 !important; border: 1px solid #e2e8f0 !important;
+  border-radius: 8px !important; font-weight: 500 !important;
 }
 </style>
 """
 st.markdown(_CSS, unsafe_allow_html=True)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SESSION STATE
@@ -422,27 +259,27 @@ NAV = [
 with st.sidebar:
     # ── Brand ────────────────────────────────────────────────────────────────
     st.markdown("""
-    <div style="padding:24px 16px 16px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:8px">
-      <div style="display:flex;align-items:center;gap:8px">
-        <div style="width:32px;height:32px;background:#f59e0b;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">⚡</div>
+    <div style="padding:20px 16px 14px;border-bottom:1px solid #f1f5f9;margin-bottom:6px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:34px;height:34px;background:#f59e0b;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;box-shadow:0 2px 6px rgba(245,158,11,.3)">⚡</div>
         <div>
-          <div style="font-size:1.1rem;font-weight:800;color:#f1f5f9;letter-spacing:-.02em;line-height:1">Semantix</div>
-          <div style="font-size:.65rem;color:#475569;letter-spacing:.1em;text-transform:uppercase;margin-top:1px">Video Intelligence</div>
+          <div style="font-size:1.05rem;font-weight:800;color:#0f172a;letter-spacing:-.02em;line-height:1.1">Semantix</div>
+          <div style="font-size:.62rem;color:#94a3b8;letter-spacing:.1em;text-transform:uppercase;margin-top:2px">Video Intelligence</div>
         </div>
       </div>
     </div>""", unsafe_allow_html=True)
 
     # ── Nav ──────────────────────────────────────────────────────────────────
-    st.markdown('<div style="padding:4px 8px;margin-bottom:4px">', unsafe_allow_html=True)
+    st.markdown('<div style="padding:6px 8px 8px">', unsafe_allow_html=True)
     for pid, icon, label in NAV:
         active = st.session_state.page == pid
         if active:
             st.markdown(
                 f'<div style="display:flex;align-items:center;gap:10px;'
-                f'background:rgba(245,158,11,.18);border:1px solid rgba(245,158,11,.3);'
-                f'border-radius:8px;padding:9px 14px;margin:2px 0;cursor:default">'
+                f'background:#fef3c7;border:1px solid #fcd34d;'
+                f'border-radius:8px;padding:9px 14px;margin:2px 0">'
                 f'<span style="font-size:1rem">{icon}</span>'
-                f'<span style="font-size:.875rem;font-weight:700;color:#fbbf24">{label}</span>'
+                f'<span style="font-size:.875rem;font-weight:700;color:#92400e">{label}</span>'
                 f'</div>',
                 unsafe_allow_html=True)
             st.button(f"{icon} {label}", key=f"nav_{pid}", disabled=True, use_container_width=True)
@@ -453,86 +290,74 @@ with st.sidebar:
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ── Divider ──────────────────────────────────────────────────────────────
-    st.markdown('<div style="height:1px;background:rgba(255,255,255,.06);margin:8px 16px 12px"></div>',
-                unsafe_allow_html=True)
+    st.markdown('<hr style="border:none;border-top:1px solid #f1f5f9;margin:4px 16px 10px">', unsafe_allow_html=True)
 
     # ── Library stats ────────────────────────────────────────────────────────
     n_vids   = len(st.session_state.videos)
     n_scenes = sum(v.scene_count for v in st.session_state.videos.values())
+
     if n_vids:
         st.markdown(
-            f'<div style="display:flex;gap:6px;margin:0 8px 12px;padding:0">'
-            f'<div style="flex:1;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);'
-            f'border-radius:8px;padding:10px;text-align:center">'
-            f'<div style="font-size:1.25rem;font-weight:800;color:#f1f5f9;line-height:1">{n_vids}</div>'
-            f'<div style="font-size:.6rem;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-top:3px">Videos</div>'
+            f'<div style="display:flex;gap:6px;margin:0 8px 10px">'
+            f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center">'
+            f'<div style="font-size:1.3rem;font-weight:800;color:#0f172a;line-height:1">{n_vids}</div>'
+            f'<div style="font-size:.6rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;margin-top:3px">Videos</div>'
             f'</div>'
-            f'<div style="flex:1;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);'
-            f'border-radius:8px;padding:10px;text-align:center">'
-            f'<div style="font-size:1.25rem;font-weight:800;color:#f1f5f9;line-height:1">{n_scenes}</div>'
-            f'<div style="font-size:.6rem;color:#475569;text-transform:uppercase;letter-spacing:.08em;margin-top:3px">Scenes</div>'
+            f'<div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px;text-align:center">'
+            f'<div style="font-size:1.3rem;font-weight:800;color:#0f172a;line-height:1">{n_scenes}</div>'
+            f'<div style="font-size:.6rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em;margin-top:3px">Scenes</div>'
             f'</div></div>', unsafe_allow_html=True)
 
-        # Active video selector — uses index= to stay in sync with selected_video
+        # Active video selector — uses index= param, NEVER writes to session_state["vm_sel"]
         vms     = list(st.session_state.videos.values())
         vid_ids = [vm.video_id for vm in vms]
         labels  = [vm.title[:26] + ("…" if len(vm.title) > 26 else "") for vm in vms]
         cur_sel = st.session_state.get("selected_video")
         correct_idx = vid_ids.index(cur_sel) if cur_sel in vid_ids else 0
 
-        st.markdown('<div style="padding:0 8px;margin-bottom:6px">', unsafe_allow_html=True)
         idx = st.selectbox("Active video", range(len(vms)),
                            format_func=lambda i: labels[i],
                            index=correct_idx,
                            key="vm_sel",
                            label_visibility="collapsed")
-        st.markdown('</div>', unsafe_allow_html=True)
 
-        # If user manually changes sidebar selector, propagate to selected_video
         chosen_vid = vid_ids[idx]
         if chosen_vid != st.session_state.get("selected_video"):
             st.session_state.selected_video = chosen_vid
             _sync_qp()
         active_vm_obj = vms[idx]
 
-        # Video info
-        ai_meta = st.session_state.ai_meta.get(active_vm_obj.video_id, {})
-        rating  = ai_meta.get("content_rating", "")
-        genre   = ai_meta.get("primary_genre", "")
-        info_parts = [active_vm_obj.fmt_duration(), f"{active_vm_obj.scene_count} scenes"]
-        if rating: info_parts.append(rating)
-        if genre:  info_parts.append(genre)
+        ai_meta   = st.session_state.ai_meta.get(active_vm_obj.video_id, {})
+        meta_bits = [active_vm_obj.fmt_duration(), f"{active_vm_obj.scene_count} scenes"]
+        if ai_meta.get("content_rating"): meta_bits.append(ai_meta["content_rating"])
+        if ai_meta.get("primary_genre"):  meta_bits.append(ai_meta["primary_genre"])
         st.markdown(
-            f'<div style="font-size:.72rem;color:#475569;padding:0 16px 8px;line-height:1.6">'
-            f'{"  ·  ".join(info_parts)}</div>', unsafe_allow_html=True)
+            f'<div style="font-size:.71rem;color:#94a3b8;padding:4px 10px 8px;line-height:1.6">'
+            f'{"  ·  ".join(meta_bits)}</div>', unsafe_allow_html=True)
     else:
         st.markdown(
-            '<div style="font-size:.8rem;color:#475569;padding:8px 16px 12px;line-height:1.5">'
-            '📂 No videos yet<br>Add one in Library</div>', unsafe_allow_html=True)
+            '<div style="font-size:.8rem;color:#94a3b8;padding:8px 16px 12px;line-height:1.5">'
+            '📂 No videos yet.<br>Add one in Library.</div>', unsafe_allow_html=True)
 
     # ── Divider ──────────────────────────────────────────────────────────────
-    st.markdown('<div style="height:1px;background:rgba(255,255,255,.06);margin:4px 16px 12px"></div>',
-                unsafe_allow_html=True)
+    st.markdown('<hr style="border:none;border-top:1px solid #f1f5f9;margin:4px 16px 10px">', unsafe_allow_html=True)
 
     # ── YouTube API key ───────────────────────────────────────────────────────
-    st.markdown('<div style="padding:0 8px">', unsafe_allow_html=True)
-    st.markdown('<div style="font-size:.7rem;color:#475569;margin-bottom:4px;padding:0 6px">YouTube API Key</div>',
+    st.markdown('<div style="font-size:.7rem;color:#94a3b8;padding:0 16px 4px;font-weight:600;letter-spacing:.04em">YOUTUBE API KEY</div>',
                 unsafe_allow_html=True)
     yt = st.text_input("YouTube API Key", type="password", value=st.session_state.yt_api_key,
-                       placeholder="Optional", key="yt_key_in", label_visibility="collapsed")
+                       placeholder="Optional — enables richer metadata", key="yt_key_in",
+                       label_visibility="collapsed")
     if yt != st.session_state.yt_api_key:
         st.session_state.yt_api_key = yt
-    st.markdown('<div style="font-size:.65rem;color:#334155;margin-top:4px;padding:0 6px">Enables richer YouTube metadata</div>',
-                unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Session info banner ───────────────────────────────────────────────────
+    # ── Session warning ───────────────────────────────────────────────────────
     if n_vids:
         st.markdown(
-            '<div style="margin:16px 8px 8px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);'
+            '<div style="margin:12px 8px 8px;background:#fffbeb;border:1px solid #fde68a;'
             'border-radius:8px;padding:8px 12px">'
-            '<div style="font-size:.65rem;color:#92400e;font-weight:600;margin-bottom:2px">⚠️ Session only</div>'
-            '<div style="font-size:.62rem;color:#475569;line-height:1.5">Videos are not saved across browser refreshes. Export your data from Insights → Export.</div>'
+            '<div style="font-size:.65rem;font-weight:700;color:#92400e;margin-bottom:2px">⚠️ Session only</div>'
+            '<div style="font-size:.62rem;color:#78350f;line-height:1.5">Data is lost on refresh. Export CSVs from Insights → Export.</div>'
             '</div>', unsafe_allow_html=True)
 
 
