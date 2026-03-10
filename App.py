@@ -368,8 +368,54 @@ Return this exact JSON structure:
 def _show_ai_meta(vm: VideoMetadata):
     meta = st.session_state.ai_meta.get(vm.video_id)
     if not meta:
-        # ... (keep your existing "Generate Now" logic here)
         return
+
+    # Use the specific CSS class we added to style.css
+    # This 'ai-intelligence-card' class handles the 'clear: both' to prevent overlap
+    st.markdown(
+        f'''
+        <div class="ai-intelligence-card">
+            <div style="display:flex; align-items:flex-start; gap:16px; flex-wrap:wrap">
+                <div style="flex:1; min-width:220px">
+                    <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#92400e; margin-bottom:4px">Summary</div>
+                    <div style="font-size:14px; color:#111827; line-height:1.6">{meta.get("summary","")}</div>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:8px; min-width:180px">
+                    <div>
+                        <span style="background:#2563eb; color:#fff; font-size:11px; font-weight:700; padding:3px 10px; border-radius:20px">
+                            {meta.get("content_rating","PG")}
+                        </span>
+                        <span style="font-size:11px; color:#6b7280; margin-left:6px">{meta.get("rating_reason","General content")}</span>
+                    </div>
+                    <div style="font-size:12px"><b>Genre:</b> {meta.get("primary_genre","—")}</div>
+                    <div style="font-size:12px"><b>Mood:</b> {meta.get("mood","—")}</div>
+                    <div style="font-size:12px"><b>Audience:</b> {meta.get("target_audience","—")}</div>
+                </div>
+            </div>
+        </div>
+        ''', 
+        unsafe_allow_html=True
+    )
+
+    # Use columns for Themes/Keywords to ensure they stay on their own 'row'
+    t1, t2 = st.columns(2)
+    with t1:
+        st.write("**Key Themes**")
+        st.caption(", ".join(meta.get("key_themes", [])))
+    with t2:
+        st.write("**SEO Keywords**")
+        st.caption(", ".join(meta.get("keywords", [])))
+
+    st.write("") # Spacer
+
+    # IMPORTANT: Ensure there is NO variable like _arrowRight listed here 
+    # as a standalone line. Wrap the expander like this:
+    with st.expander("🔍 SEO Metadata", expanded=False):
+        st.text_input("SEO Title", value=meta.get("seo_title", ""), key=f"seo_t_{vm.video_id}")
+        st.text_area("SEO Description", value=meta.get("seo_description", ""), key=f"seo_d_{vm.video_id}")
+
+    # Final Action Button
+    st.button("🔄 Regenerate Metadata", key=f"regen_{vm.video_id}")
 
     # 1. Define the dynamic rating color
     rating_color = {
