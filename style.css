@@ -48,4 +48,30 @@ input, textarea, [data-baseweb="select"] > div {
   border-radius: 8px !important;
 }
 
+/* ── AI Intelligence Blocks ── */
+
+/* Force spacing between Streamlit components to prevent jumble */
+[data-testid="stVerticalBlock"] > div {
+    gap: 1.5rem !important;
+}
+
+/* The wrapper for your AI Summary box */
+.ai-intelligence-card {
+    display: block;
+    width: 100%;
+    margin-bottom: 24px !important;
+    padding: 20px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #fffbeb, #fef3c7);
+    border: 1px solid #fcd34d;
+    clear: both; /* Crucial: ensures following elements stay below */
+}
+
+/* Ensure expanders like 'SEO Metadata' have distinct spacing */
+[data-testid="stExpander"] {
+    margin-top: 20px !important;
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border-color) !important;
+}
+
 input:focus, textarea:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px rgba(245,158,11,.12) !important; }
