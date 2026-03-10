@@ -366,17 +366,34 @@ Return this exact JSON structure:
 
 
 def _show_ai_meta(vm: VideoMetadata):
-    """Display AI-generated metadata panel."""
     meta = st.session_state.ai_meta.get(vm.video_id)
     if not meta:
-        col1, col2 = st.columns([3,1])
-        col1.info("🤖 No AI metadata yet — generate it below")
-        if col2.button("✨ Generate Now", key=f"gen_meta_{vm.video_id}", type="primary"):
-            srt_sample = " ".join(s.text for s in vm.scenes[:15])
-            with st.spinner("🤖 Generating AI metadata…"):
-                _generate_ai_meta(vm, srt_sample)
-            st.rerun()
+        # ... (keep your existing "Generate Now" logic here)
         return
+
+    # Use the new class to prevent the UI from jumbling
+    st.markdown(
+        f'''
+        <div class="ai-intelligence-card">
+            <div style="display:flex; align-items:flex-start; gap:16px; flex-wrap:wrap">
+                <div style="flex:1; min-width:220px">
+                    <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#92400e; margin-bottom:4px">AI Summary</div>
+                    <div style="font-size:14px; color:#111827; line-height:1.6">{meta.get("summary","")}</div>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:8px; min-width:160px">
+                    <div><span style="background:#f59e0b; color:#fff; font-size:11px; font-weight:700; padding:3px 10px; border-radius:20px">{meta.get("content_rating","PG")}</span></div>
+                    <div style="font-size:12px"><b>Genre:</b> {meta.get("primary_genre","—")}</div>
+                    <div style="font-size:12px"><b>Mood:</b> {meta.get("mood","—")}</div>
+                </div>
+            </div>
+        </div>
+        ''', 
+        unsafe_allow_html=True
+    )
+    
+    # The SEO Expander will now sit correctly below the card
+    with st.expander("🔍 SEO Metadata"):
+        # ... (rest of your SEO code)
 
     # Rating badge
     rating_color = {"G":"#16a34a","PG":"#2563eb","PG-13":"#d97706","R":"#dc2626"}.get(meta.get("content_rating","PG"),"#6b7280")
