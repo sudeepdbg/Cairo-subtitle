@@ -373,25 +373,11 @@ def _show_ai_meta(vm: VideoMetadata):
     # 1. UI: Unified Card (Uses your CSS class 'ai-intelligence-card')
     rating_color = {"G":"#16a34a","PG":"#2563eb","PG-13":"#d97706","R":"#dc2626"}.get(meta.get("content_rating","PG"),"#6b7280")
     
-    st.markdown(f'''
-        <div class="ai-intelligence-card">
-            <div style="display:flex; align-items:flex-start; gap:16px; flex-wrap:wrap">
-                <div style="flex:1; min-width:220px">
-                    <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#92400e; margin-bottom:4px">Summary</div>
-                    <div style="font-size:14px; color:#111827; line-height:1.6">{meta.get("summary","")}</div>
-                </div>
-                <div style="display:flex; flex-direction:column; gap:8px; min-width:160px">
-                    <div>
-                        <span style="background:{rating_color}; color:#fff; font-size:11px; font-weight:700; padding:3px 10px; border-radius:20px">
-                            {meta.get("content_rating","PG")}
-                        </span>
-                    </div>
-                    <div style="font-size:12px"><b>Genre:</b> {meta.get("primary_genre","—")}</div>
-                    <div style="font-size:12px"><b>Mood:</b> {meta.get("mood","—")}</div>
-                </div>
-            </div>
-        </div>
-    ''', unsafe_allow_html=True)
+    st.markdown(
+    '''<div class="ai-intelligence-card">
+        </div>''', 
+    unsafe_allow_html=True
+)
 
     # 2. UI: Single SEO Expander
     with st.expander("🔍 SEO Metadata"):
