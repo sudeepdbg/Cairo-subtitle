@@ -367,141 +367,34 @@ Return this exact JSON structure:
 
 def _show_ai_meta(vm: VideoMetadata):
     meta = st.session_state.ai_meta.get(vm.video_id)
-    if not meta:
-        return
+    if not meta: return
 
-    # Use the specific CSS class we added to style.css
-    # This 'ai-intelligence-card' class handles the 'clear: both' to prevent overlap
-    st.markdown(
-        f'''
+    # Single source of truth for the rating color
+    colors = {"G":"#16a34a","PG":"#2563eb","PG-13":"#d97706","R":"#dc2626"}
+    rating_color = colors.get(meta.get("content_rating","PG"), "#6b7280")
+
+    # Render unified card
+    st.markdown(f'''
         <div class="ai-intelligence-card">
-            <div style="display:flex; align-items:flex-start; gap:16px; flex-wrap:wrap">
+            <div style="display:flex; gap:16px; flex-wrap:wrap">
                 <div style="flex:1; min-width:220px">
-                    <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#92400e; margin-bottom:4px">Summary</div>
-                    <div style="font-size:14px; color:#111827; line-height:1.6">{meta.get("summary","")}</div>
+                    <div style="font-size:11px; font-weight:700; color:#92400e; margin-bottom:4px">AI SUMMARY</div>
+                    <div style="font-size:14px; line-height:1.6">{meta.get("summary","")}</div>
                 </div>
                 <div style="display:flex; flex-direction:column; gap:8px; min-width:180px">
-                    <div>
-                        <span style="background:#2563eb; color:#fff; font-size:11px; font-weight:700; padding:3px 10px; border-radius:20px">
-                            {meta.get("content_rating","PG")}
-                        </span>
-                        <span style="font-size:11px; color:#6b7280; margin-left:6px">{meta.get("rating_reason","General content")}</span>
-                    </div>
+                    <span style="background:{rating_color}; color:#fff; font-size:11px; font-weight:700; padding:3px 10px; border-radius:20px; width:fit-content">
+                        {meta.get("content_rating","PG")}
+                    </span>
                     <div style="font-size:12px"><b>Genre:</b> {meta.get("primary_genre","—")}</div>
                     <div style="font-size:12px"><b>Mood:</b> {meta.get("mood","—")}</div>
-                    <div style="font-size:12px"><b>Audience:</b> {meta.get("target_audience","—")}</div>
                 </div>
             </div>
         </div>
-        ''', 
-        unsafe_allow_html=True
-    )
+    ''', unsafe_allow_html=True)
 
-    # Use columns for Themes/Keywords to ensure they stay on their own 'row'
-    t1, t2 = st.columns(2)
-    with t1:
-        st.write("**Key Themes**")
-        st.caption(", ".join(meta.get("key_themes", [])))
-    with t2:
-        st.write("**SEO Keywords**")
-        st.caption(", ".join(meta.get("keywords", [])))
-
-    st.write("") # Spacer
-
-    # IMPORTANT: Ensure there is NO variable like _arrowRight listed here 
-    # as a standalone line. Wrap the expander like this:
-    with st.expander("🔍 SEO Metadata", expanded=False):
-        st.text_input("SEO Title", value=meta.get("seo_title", ""), key=f"seo_t_{vm.video_id}")
-        st.text_area("SEO Description", value=meta.get("seo_description", ""), key=f"seo_d_{vm.video_id}")
-
-    # Final Action Button
-    st.button("🔄 Regenerate Metadata", key=f"regen_{vm.video_id}")
-
-    # 1. Define the dynamic rating color
-    rating_color = {
-        "G": "#16a34a", 
-        "PG": "#2563eb", 
-        "PG-13": "#d97706", 
-        "R": "#dc2626"
-    }.get(meta.get("content_rating", "PG"), "#6b7280")
-
-    # 2. Render the card ONCE using the CSS class from style.css
-    st.markdown(
-        f'''
-        <div class="ai-intelligence-card">
-            <div style="display:flex; align-items:flex-start; gap:16px; flex-wrap:wrap">
-                <div style="flex:1; min-width:220px">
-                    <div style="font-size:11px; font-weight:700; text-transform:uppercase; color:#92400e; margin-bottom:4px">Summary</div>
-                    <div style="font-size:14px; color:#111827; line-height:1.6">{meta.get("summary","")}</div>
-                </div>
-                <div style="display:flex; flex-direction:column; gap:8px; min-width:180px">
-                    <div>
-                        <span style="background:{rating_color}; color:#fff; font-size:11px; font-weight:700; padding:3px 10px; border-radius:20px">
-                            {meta.get("content_rating","PG")}
-                        </span>
-                        <span style="font-size:11px; color:#6b7280; margin-left:6px">{meta.get("rating_reason","General content")}</span>
-                    </div>
-                    <div style="font-size:12px"><b>Genre:</b> {meta.get("primary_genre","—")}</div>
-                    <div style="font-size:12px"><b>Mood:</b> {meta.get("mood","—")}</div>
-                    <div style="font-size:12px"><b>Audience:</b> {meta.get("target_audience","—")}</div>
-                </div>
-            </div>
-        </div>
-        ''', 
-        unsafe_allow_html=True
-    )
-    
-    # 3. Themes and Keywords section
-    t1, t2 = st.columns(2)
-    with t1:
-        st.markdown(f"**Key Themes:** {', '.join(meta.get('key_themes', []))}")
-    with t2:
-        st.markdown(f"**SEO Keywords:** {', '.join(meta.get('keywords', []))}")
-
-    # 4. The Expander (Now safely separated by the CSS 'clear' property)
-    with st.expander("🔍 SEO Metadata"):
-        st.text_input("SEO Title", value=meta.get("seo_title", ""), key=f"seo_t_{vm.video_id}")
-        st.text_area("SEO Description", value=meta.get("seo_description", ""), key=f"seo_d_{vm.video_id}")
-
-    if st.button("🔄 Regenerate Metadata", key=f"regen_{vm.video_id}"):
-        # Trigger your logic
-        pass
-    
-    # The SEO Expander will now sit correctly below the card
-    with st.expander("🔍 SEO Metadata"):
-        # ... (rest of your SEO code)
-
-    # Rating badge
-    rating_color = {"G":"#16a34a","PG":"#2563eb","PG-13":"#d97706","R":"#dc2626"}.get(meta.get("content_rating","PG"),"#6b7280")
-
-    st.markdown(
-        f'<div style="background:linear-gradient(135deg,#fffbeb,#fef3c7);border:1px solid #fcd34d;'
-        f'border-radius:12px;padding:16px 20px;margin-bottom:12px">'
-        f'<div style="display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap">'
-        f'<div style="flex:1;min-width:220px">'
-        f'<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#92400e;margin-bottom:4px">AI Summary</div>'
-        f'<div style="font-size:14px;color:#111827;line-height:1.6">{meta.get("summary","")}</div>'
-        f'</div>'
-        f'<div style="display:flex;flex-direction:column;gap:8px;min-width:160px">'
-        f'<div><span style="background:{rating_color};color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px">{meta.get("content_rating","?")}</span>'
-        f'<span style="font-size:11px;color:#6b7280;margin-left:6px">{meta.get("rating_reason","")}</span></div>'
-        f'<div style="font-size:12px"><b>Genre:</b> {meta.get("primary_genre","—")}</div>'
-        f'<div style="font-size:12px"><b>Mood:</b> {meta.get("mood","—")}</div>'
-        f'<div style="font-size:12px"><b>Audience:</b> {meta.get("target_audience","—")}</div>'
-        f'</div></div></div>', unsafe_allow_html=True)
-
-    # Themes + keywords
-    col1, col2 = st.columns(2)
-    with col1:
-        themes = meta.get("key_themes",[])
-        if themes:
-            chips = "".join(_tag_chip(t,"#eff6ff","#bfdbfe","#1d4ed8","11px") for t in themes)
-            st.markdown(f"**Key Themes**  {chips}", unsafe_allow_html=True)
-    with col2:
-        kws = meta.get("keywords",[])
-        if kws:
-            chips = "".join(_tag_chip(k,"#f5f3ff","#ddd6fe","#5b21b6","11px") for k in kws[:6])
-            st.markdown(f"**SEO Keywords**  {chips}", unsafe_allow_html=True)
+    with st.expander("🔍 SEO & Metadata Details"):
+        st.text_input("SEO Title", value=meta.get("seo_title",""), key=f"seo_t_{vm.video_id}")
+        st.text_area("SEO Description", value=meta.get("seo_description",""), key=f"seo_d_{vm.video_id}")
 
     # Advertiser suitability
     suit = meta.get("advertiser_suitability","Medium")
