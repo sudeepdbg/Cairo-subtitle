@@ -48,167 +48,11 @@ st.set_page_config(
 # ══════════════════════════════════════════════════════════════════════════════
 # DESIGN SYSTEM — Fully light theme. No dark sidebar.
 # ══════════════════════════════════════════════════════════════════════════════
-_CSS = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+def load_css():
+    with open("style.css", "r") as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-html, body, * { font-family: 'Inter', sans-serif !important; box-sizing: border-box; }
-#MainMenu, footer, [data-testid="stStatusWidget"], [data-testid="stDecoration"] { display: none !important; }
-
-/* ── App shell ── */
-.stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] { background: #f1f5f9 !important; }
-[data-testid="block-container"] { background: #f1f5f9 !important; padding: 2rem 2.5rem 4rem !important; max-width: 1400px !important; }
-
-/* ── Sidebar — clean white ── */
-[data-testid="stSidebar"] > div:first-child {
-  background: #ffffff !important;
-  border-right: 1px solid #e2e8f0 !important;
-  box-shadow: 2px 0 8px rgba(0,0,0,.04) !important;
-}
-[data-testid="stSidebar"] { background: #ffffff !important; }
-
-/* Sidebar nav buttons */
-[data-testid="stSidebar"] .stButton > button {
-  width: 100% !important; text-align: left !important; justify-content: flex-start !important;
-  background: transparent !important; border: none !important; border-radius: 8px !important;
-  color: #64748b !important; font-size: .875rem !important; font-weight: 500 !important;
-  padding: .6rem 1rem !important; box-shadow: none !important;
-  transition: all .15s !important; margin: 2px 0 !important;
-}
-[data-testid="stSidebar"] .stButton > button:hover { background: #f8fafc !important; color: #1e293b !important; }
-[data-testid="stSidebar"] .stButton > button:disabled { display: none !important; }
-
-/* Sidebar selectbox */
-[data-testid="stSidebar"] [data-baseweb="select"] > div {
-  background: #f8fafc !important; border: 1px solid #e2e8f0 !important;
-  border-radius: 8px !important; color: #1e293b !important;
-}
-[data-testid="stSidebar"] [data-baseweb="select"] span { color: #1e293b !important; }
-
-/* Sidebar input */
-[data-testid="stSidebar"] input {
-  background: #f8fafc !important; border: 1px solid #e2e8f0 !important;
-  border-radius: 8px !important; color: #1e293b !important;
-}
-[data-testid="stSidebar"] input::placeholder { color: #94a3b8 !important; }
-
-/* ── Main content ── */
-section.main { background: #f1f5f9 !important; color: #1e293b !important; }
-section.main h1, section.main h2, section.main h3, section.main h4 { color: #0f172a !important; font-weight: 700 !important; }
-section.main label { color: #374151 !important; }
-section.main p { color: #374151 !important; }
-
-/* Buttons — amber */
-section.main .stButton > button {
-  background: #f59e0b !important; color: #111827 !important; border: none !important;
-  border-radius: 8px !important; font-weight: 600 !important; font-size: .875rem !important;
-  padding: .5rem 1.25rem !important; box-shadow: 0 1px 2px rgba(0,0,0,.08) !important;
-  transition: all .15s !important;
-}
-section.main .stButton > button:hover {
-  background: #d97706 !important; box-shadow: 0 4px 12px rgba(245,158,11,.3) !important;
-  transform: translateY(-1px) !important;
-}
-section.main .stButton > button:active { transform: translateY(0) !important; }
-section.main .stButton > button:disabled {
-  background: #e2e8f0 !important; color: #94a3b8 !important;
-  box-shadow: none !important; transform: none !important;
-}
-
-/* Tabs */
-[data-testid="stTabs"] [data-baseweb="tab-list"] {
-  background: #e2e8f0 !important; border-radius: 10px !important; padding: 3px !important; gap: 2px !important; border: none !important;
-}
-[data-testid="stTabs"] [data-baseweb="tab"] {
-  background: transparent !important; color: #64748b !important; border-radius: 8px !important;
-  font-size: .82rem !important; font-weight: 500 !important; border: none !important; padding: 6px 14px !important;
-}
-[data-testid="stTabs"] [data-baseweb="tab"]:hover { background: rgba(255,255,255,.7) !important; color: #1e293b !important; }
-[data-testid="stTabs"] [aria-selected="true"] {
-  background: #ffffff !important; color: #111827 !important; font-weight: 700 !important;
-  box-shadow: 0 1px 3px rgba(0,0,0,.1) !important;
-}
-
-/* Metrics */
-section.main [data-testid="stMetric"] {
-  background: #ffffff !important; border: 1px solid #e2e8f0 !important;
-  border-radius: 12px !important; padding: 1rem 1.2rem !important;
-  box-shadow: 0 1px 3px rgba(0,0,0,.04) !important;
-}
-section.main [data-testid="stMetricLabel"] > div {
-  font-size: .65rem !important; font-weight: 700 !important; letter-spacing: .07em !important;
-  text-transform: uppercase !important; color: #94a3b8 !important;
-}
-section.main [data-testid="stMetricValue"] > div { font-size: 1.6rem !important; font-weight: 800 !important; color: #0f172a !important; }
-
-/* Containers */
-[data-testid="stVerticalBlockBorderWrapper"] {
-  background: #ffffff !important; border: 1px solid #e2e8f0 !important;
-  border-radius: 12px !important; box-shadow: 0 1px 3px rgba(0,0,0,.04) !important;
-}
-
-/* Inputs */
-section.main input, section.main textarea {
-  background: #ffffff !important; border: 1.5px solid #e2e8f0 !important;
-  border-radius: 8px !important; color: #111827 !important;
-}
-section.main input:focus, section.main textarea:focus {
-  border-color: #f59e0b !important; box-shadow: 0 0 0 3px rgba(245,158,11,.12) !important;
-}
-section.main input::placeholder, section.main textarea::placeholder { color: #94a3b8 !important; }
-
-/* Selectbox */
-section.main [data-baseweb="select"] > div {
-  background: #ffffff !important; border: 1.5px solid #e2e8f0 !important;
-  border-radius: 8px !important; color: #111827 !important;
-}
-section.main [data-baseweb="select"] span { color: #111827 !important; }
-
-/* Dropdown */
-[data-baseweb="popover"], [data-baseweb="menu"] {
-  background: #ffffff !important; border: 1px solid #e2e8f0 !important;
-  box-shadow: 0 10px 30px rgba(0,0,0,.1) !important; border-radius: 10px !important;
-}
-[role="option"] { background: #ffffff !important; color: #111827 !important; }
-[role="option"]:hover { background: #fef9ee !important; }
-[role="option"][aria-selected="true"] { background: #fef3c7 !important; color: #92400e !important; }
-
-/* File uploader */
-[data-testid="stFileUploaderDropzone"] {
-  background: #f8fafc !important; border: 2px dashed #e2e8f0 !important; border-radius: 10px !important;
-}
-[data-testid="stFileUploaderDropzone"] span { color: #64748b !important; }
-[data-testid="stFileUploaderDropzone"] button {
-  background: #ffffff !important; border: 1px solid #e2e8f0 !important; color: #374151 !important; border-radius: 6px !important;
-}
-
-/* Expanders */
-section.main [data-testid="stExpander"] summary {
-  background: #ffffff !important; border: 1px solid #e2e8f0 !important;
-  border-radius: 8px !important; padding: 10px 16px !important; font-weight: 600 !important; color: #374151 !important;
-}
-section.main [data-testid="stExpander"] summary:hover { background: #f8fafc !important; }
-section.main [data-testid="stExpander"] > div:last-child {
-  border: 1px solid #e2e8f0 !important; border-top: none !important;
-  border-radius: 0 0 8px 8px !important; background: #ffffff !important;
-}
-
-/* Misc */
-[data-testid="stProgress"] > div { background: #e2e8f0 !important; border-radius: 4px !important; }
-[data-testid="stProgress"] > div > div { background: #f59e0b !important; border-radius: 4px !important; }
-[data-testid="stSlider"] [data-baseweb="slider"] [role="slider"] { background: #f59e0b !important; }
-section.main [data-testid="stRadio"] label { color: #374151 !important; }
-section.main [data-testid="stCaptionContainer"], section.main .stCaption { color: #64748b !important; font-size: .8rem !important; }
-hr { border: none !important; border-top: 1px solid #e2e8f0 !important; margin: 1rem 0 !important; }
-[data-testid="stAlert"] { border-radius: 10px !important; }
-[data-testid="stDataFrame"] { border: 1px solid #e2e8f0 !important; border-radius: 10px !important; overflow: hidden !important; }
-[data-testid="stPlotlyChart"] { border: 1px solid #e2e8f0 !important; border-radius: 12px !important; overflow: hidden !important; background: #ffffff !important; }
-[data-testid="stStatus"] { background: #ffffff !important; border: 1px solid #e2e8f0 !important; border-radius: 10px !important; }
-section.main a[data-testid="stLinkButton"] {
-  background: #f1f5f9 !important; color: #374151 !important; border: 1px solid #e2e8f0 !important;
-  border-radius: 8px !important; font-weight: 500 !important;
-}
-</style>
+load_css()
 """
 st.markdown(_CSS, unsafe_allow_html=True)
 
@@ -388,14 +232,22 @@ with st.sidebar:
 def _generate_ai_meta(vm: VideoMetadata, transcript_sample: str):
     """Generates metadata using Pydantic validation via Groq."""
     
-    prompt = f"Analyze this video: {vm.title}. Transcript: {transcript_sample[:2000]}"
+    # Detailed prompt to ensure high-quality output
+    prompt = f"""
+    You are a video intelligence expert. Analyze the following video:
+    Title: {vm.title}
+    Duration: {vm.fmt_duration()}
+    Narrative: {vm.narrative_structure}
+    Transcript Sample: {transcript_sample[:3000]}
+    
+    Return ONLY a valid JSON object matching the requested schema. No conversational text.
+    """
     
     try:
-        # Initialize Groq client with instructor
-        # Note: Avoid hardcoding your key here; use st.secrets as shown
+        # Use JSON_SCHEMA mode to force valid output
         client = instructor.from_openai(
             Groq(api_key=st.secrets["GROQ_API_KEY"]),
-            mode=instructor.Mode.JSON
+            mode=instructor.Mode.JSON_SCHEMA
         )
         
         meta = client.chat.completions.create(
@@ -404,32 +256,26 @@ def _generate_ai_meta(vm: VideoMetadata, transcript_sample: str):
             messages=[{"role": "user", "content": prompt}]
         )
         st.session_state.ai_meta[vm.video_id] = meta.model_dump()
-        return # STOP here if successful
         
     except Exception as e:
-        st.warning(f"Structured extraction via Groq failed: {e}. Falling back to heuristic.")
-        
-        # Fallback Logic
+        st.error(f"Extraction failed: {e}")
+        # Fallback dictionary to prevent UI crash
         iab_list = list({c["name"] for s in vm.scenes for c in s.iab_categories[:2]})
-        pos = sum(1 for s in vm.scenes if s.sentiment.get("label")=="positive")
-        neg = sum(1 for s in vm.scenes if s.sentiment.get("label")=="negative")
-        mood = "Exciting" if pos > neg*2 else "Tense" if neg > pos else "Balanced"
-        
         st.session_state.ai_meta[vm.video_id] = {
-            "summary": f"{vm.title} — {vm.fmt_duration()} duration with {vm.scene_count} scenes.",
+            "summary": "Metadata unavailable, using heuristic fallback.",
             "short_description": vm.title[:15],
-            "content_rating": "PG", 
-            "rating_reason": "General content",
+            "content_rating": "PG",
+            "rating_reason": "Default fallback applied",
             "primary_genre": iab_list[0] if iab_list else "General",
             "target_audience": "General audience",
             "key_themes": iab_list[:4],
-            "mood": mood, 
+            "mood": "Neutral",
             "keywords": iab_list[:8],
             "content_warnings": [],
-            "advertiser_suitability": "High",
-            "advertiser_reason": "Based on local scene analysis",
+            "advertiser_suitability": "Medium",
+            "advertiser_reason": "Analysis failed, defaulting to medium",
             "seo_title": vm.title[:60],
-            "seo_description": f"{vm.title} — {vm.scene_count} scenes, {vm.fmt_duration()}"
+            "seo_description": "Auto-generated metadata fallback."
         }
 
     # Build scene summary for context
